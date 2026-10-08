@@ -21,7 +21,13 @@ Each page is one self-contained HTML file with no outside libraries.
 4. Describe the characters, write one line per scene, and set the frames per scene. Then tap **Generate**.
 5. Tap **Preview** to watch it, then **Make video** and **Save video**.
 
-Generate only makes what's missing: new scenes, edited scenes, and extra frames. Tap any frame to redo it, delete it, or save it as an image. Work autosaves in the phone's browser storage.
+Generate only makes what's missing: new scenes, edited scenes, and extra frames. To try again with different pictures:
+
+- **Redo all frames** (under the scenes) remakes everything with new seeds. **Clear all frames** deletes them but keeps your text.
+- **Redo scene** on a scene card remakes that scene with new seeds.
+- Tap a frame for **Redo from here to the end** (this frame and everything after it) or **Redo only this frame**.
+
+Each scene makes 1 frame by default. Change it per scene with − / +, or for new scenes in **Settings → Frames per new scene** (**Use for all scenes** applies it everywhere). Open **Prompt sent to Local Dream** on a scene to see the exact prompt, with any part the model ignores struck through. Work autosaves in the phone's browser storage.
 
 ## Privacy
 

@@ -107,9 +107,15 @@ ol.scenes { list-style: none; margin: 0; padding: 0; display: flex; flex-directi
 .stepper button { width: 34px; height: 36px; border: 0; background: transparent; color: var(--ink); font: 700 1.05rem var(--f-body); cursor: pointer; }
 .stepper output { min-width: 64px; text-align: center; font: 600 .82rem var(--f-mono); }
 .scene-ctl select { width: auto; flex: 1 1 120px; padding: 8px 10px; font-size: .88rem; }
+.frames-row { align-items: end; }
+.redo-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .scene-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
 .tok { font: 500 .75rem var(--f-mono); color: var(--muted); }
 .tok.over { color: var(--bad); }
+.sent { font-size: .78rem; color: var(--muted); }
+.sent summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
+.sent p { margin: 6px 0 0; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); overflow-wrap: anywhere; font-family: var(--f-mono); line-height: 1.45; }
+.sent s { color: var(--bad); opacity: .8; }
 .cut { font-size: .75rem; color: var(--bad); margin: -4px 0 0; overflow-wrap: anywhere; }
 .thumbs { display: flex; gap: 6px; overflow-x: auto; padding: 6px; background: var(--film); border-radius: 10px; min-height: 72px; align-items: center; overscroll-behavior-x: contain; }
 .thumbs .none { color: #9ba1af; font-size: .78rem; padding: 0 6px; }
@@ -210,6 +216,11 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
     <p class="sub" id="motionNote"></p>
     <ol class="scenes" id="scenes"></ol>
     <button class="btn" type="button" id="addScene">+ Add scene</button>
+    <div class="redo-row">
+      <button class="btn" type="button" id="redoAll">Redo all frames</button>
+      <button class="btn danger" type="button" id="clearFrames">Clear all frames</button>
+    </div>
+    <p class="sub">Both keep your text and settings. Redo makes every frame again with new seeds, so you get different pictures.</p>
   </section>
 
   <!-- Video -->
@@ -272,6 +283,10 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
     <div class="row">
       <label class="field" for="steps">Steps <input type="number" id="steps" min="1" max="50" value="30" inputmode="numeric"></label>
       <label class="field" for="cfg">CFG <input type="number" id="cfg" min="1" max="20" step="0.5" value="7" inputmode="decimal"></label>
+    </div>
+    <div class="row frames-row">
+      <label class="field" for="sceneFrames">Frames per new scene <input type="number" id="sceneFrames" min="1" max="60" value="1" inputmode="numeric"></label>
+      <button class="btn small" type="button" id="framesAll">Use for all scenes</button>
     </div>
     <label class="field" for="scheduler">Sampler
       <select id="scheduler">
@@ -337,7 +352,8 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
     <img id="fdImg" alt="Selected frame">
     <p class="sub" id="fdMeta"></p>
     <div class="btns">
-      <button class="btn" type="button" id="fdRedo">Redo this frame</button>
+      <button class="btn primary" type="button" id="fdRedoOn">Redo from here to the end</button>
+      <button class="btn" type="button" id="fdRedo">Redo only this frame</button>
       <button class="btn" type="button" id="fdSave">Save image</button>
       <button class="btn danger" type="button" id="fdDelete">Delete</button>
     </div>
@@ -374,11 +390,12 @@ const RES = {
 };
 
 // ---------- project state ----------
-function newScene(text = "", frames = 4) { return { id: uid(), text, frames, move: "none", edited: false, imgs: [] }; }
+function defFrames() { const el = document.getElementById("sceneFrames"); const n = el ? parseInt(el.value, 10) : 1; return Number.isFinite(n) ? Math.min(60, Math.max(1, n)) : 1; }
+function newScene(text = "", frames = defFrames()) { return { id: uid(), text, frames, move: "none", edited: false, imgs: [] }; }
 let project = {
   character: "", subject: "none", motion: "balanced", seed: rndSeed(), photo: null,
   mask: null, maskAspect: 1, maskPct: 100,   // mask: PNG, white = can change, black = keep
-  scenes: [newScene("", 4)],
+  scenes: [newScene("")],
 };
 let noiseOk = null; // resolution the person confirmed after a noise warning
 let busy = false, abortCtl = null, working = null; // working = { sceneId, index }
@@ -391,7 +408,7 @@ function dropUrl(blob) { const u = urls.get(blob); if (u) { URL.revokeObjectURL(
 
 // ---------- storage: settings in localStorage, project (with images) in IndexedDB ----------
 const SET_KEY = "dreamreel.lite.settings";
-const SET_IDS = ["modelType", "resolution", "steps", "cfg", "scheduler", "negative", "lockSeed", "speed", "outSize", "boomerang"];
+const SET_IDS = ["modelType", "resolution", "sceneFrames", "steps", "cfg", "scheduler", "negative", "lockSeed", "speed", "outSize", "boomerang"];
 function saveSettings() {
   const o = {}; SET_IDS.forEach((id) => { const el = $(id); o[id] = el.type === "checkbox" ? el.checked : el.value; });
   try { localStorage.setItem(SET_KEY, JSON.stringify(o)); } catch (_) {}
@@ -603,6 +620,14 @@ async function updateTokens(id) {
   if (over && overflowAt >= 0 && overflowAt < p.length) { cutEl.textContent = `Ignored: “${p.slice(overflowAt).trim()}”`; cutEl.hidden = false; }
   else if (over) { cutEl.textContent = "Too long: the end of the prompt will be ignored. Shorten the characters or scene text."; cutEl.hidden = false; }
   else cutEl.hidden = true;
+  // Show the exact prompt; the part the model never reads is struck through.
+  const sp = card.querySelector(".sent p"); sp.textContent = "";
+  if (!p) sp.textContent = "Nothing yet. Write the scene text or describe the characters.";
+  else if (overflowAt >= 0 && overflowAt < p.length) {
+    const kept = document.createElement("span"); kept.textContent = p.slice(0, overflowAt);
+    const lost = document.createElement("s"); lost.textContent = p.slice(overflowAt); lost.title = "Ignored by the model";
+    sp.append(kept, lost);
+  } else sp.textContent = p;
 }
 
 // ---------- video encoding (shared with Dream Reel) ----------
@@ -802,13 +827,13 @@ function sceneCard(s, i) {
     icon("×", "Remove", () => removeScene(i), n === 1));
 
   const ta = document.createElement("textarea"); ta.id = `text-${s.id}`; ta.rows = 2; ta.value = s.text;
-  ta.placeholder = "What happens in this scene?"; ta.setAttribute("aria-label", `Scene ${i + 1} text`);
+  ta.placeholder = "What the picture shows, in short phrases. E.g. girl on a park bench, reading a book, sunset light"; ta.setAttribute("aria-label", `Scene ${i + 1} text`);
   ta.addEventListener("input", () => { s.text = ta.value; if (s.imgs.length) markEdited(s); queueTokens(s.id); saveProject(); });
 
   const ctl = document.createElement("div"); ctl.className = "scene-ctl";
   const step = document.createElement("div"); step.className = "stepper";
   const minus = document.createElement("button"); minus.type = "button"; minus.textContent = "−"; minus.setAttribute("aria-label", "Fewer frames");
-  const out = document.createElement("output"); out.textContent = `${s.frames} frames`;
+  const out = document.createElement("output"); out.textContent = `${s.frames} frame${s.frames === 1 ? "" : "s"}`;
   const plus = document.createElement("button"); plus.type = "button"; plus.textContent = "+"; plus.setAttribute("aria-label", "More frames");
   minus.disabled = busy; plus.disabled = busy;
   minus.addEventListener("click", () => setFrames(s, s.frames - 1));
@@ -823,14 +848,17 @@ function sceneCard(s, i) {
   const foot = document.createElement("div"); foot.className = "scene-foot";
   const tok = document.createElement("span"); tok.className = "tok"; tok.textContent = "";
   const redo = document.createElement("button"); redo.type = "button"; redo.className = "btn small"; redo.textContent = s.imgs.length ? "Redo scene" : "Make scene";
-  redo.disabled = busy; redo.addEventListener("click", () => runJobs([{ scene: s, from: 0 }]));
+  redo.disabled = busy; redo.addEventListener("click", () => runJobs([{ scene: s, from: 0 }], { fresh: s.imgs.length > 0 }));
   foot.append(tok, redo);
   const cutEl = document.createElement("p"); cutEl.className = "cut"; cutEl.hidden = true;
+  const sent = document.createElement("details"); sent.className = "sent";
+  const sum = document.createElement("summary"); sum.textContent = "Prompt sent to Local Dream";
+  const sentP = document.createElement("p"); sent.append(sum, sentP);
 
   const thumbs = document.createElement("div"); thumbs.className = "thumbs"; thumbs.id = `thumbs-${s.id}`;
   fillThumbs(s, thumbs);
 
-  li.append(top, ta, ctl, foot, cutEl, thumbs);
+  li.append(top, ta, ctl, foot, cutEl, sent, thumbs);
   queueTokens(s.id);
   return li;
 }
@@ -839,7 +867,7 @@ function fillThumbs(s, box) {
   box.textContent = "";
   const total = Math.max(s.frames, s.imgs.length);
   if (!s.imgs.length && !(working && working.sceneId === s.id)) {
-    const e = document.createElement("span"); e.className = "none"; e.textContent = `${s.frames} frames will appear here`; box.appendChild(e); return;
+    const e = document.createElement("span"); e.className = "none"; e.textContent = s.frames === 1 ? "The frame will appear here" : `${s.frames} frames will appear here`; box.appendChild(e); return;
   }
   for (let k = 0; k < total; k++) {
     const m = s.imgs[k];
@@ -880,7 +908,7 @@ function removeScene(i) {
 }
 $("addScene").addEventListener("click", () => {
   if (busy || project.scenes.length >= 30) return;
-  const s = newScene("", 4); project.scenes.push(s); renderScenes(); saveProject();
+  const s = newScene(""); project.scenes.push(s); renderScenes(); saveProject();
   const ta = $(`text-${s.id}`); if (ta) { ta.focus(); ta.scrollIntoView({ block: "center", behavior: "smooth" }); }
 });
 function allFrames() { const out = []; project.scenes.forEach((s) => s.imgs.forEach((m) => out.push(m))); return out; }
@@ -931,7 +959,7 @@ function setBusy(b) {
   busy = b;
   $("genBtn").hidden = b; $("stopBtn").hidden = !b;
   $("photoBtn").disabled = b; $("photoClear").disabled = b; $("newProject").disabled = b; $("maskBtn").disabled = b;
-  ["fdRedo", "fdDelete"].forEach((id) => ($(id).disabled = b));
+  ["fdRedo", "fdRedoOn", "fdDelete", "redoAll", "clearFrames"].forEach((id) => ($(id).disabled = b));
   renderScenes();
 }
 // Image a scene starts from: the last frame of the scene before it, or the start image for scene 1.
@@ -964,7 +992,8 @@ async function makeFrame(scene, k, prev, seed, signal, label, frac0, frac1) {
   }, signal);
 }
 // jobs: [{ scene, from }] — `from` is the first frame index to (re)make; frames from there on are replaced.
-async function runJobs(jobs) {
+// opts.fresh: use new seeds. Same seeds + same start image give the same picture again, so every redo needs this.
+async function runJobs(jobs, opts = {}) {
   if (busy || !jobs.length) return;
   for (const j of jobs) if (!promptFor(j.scene)) { setStatus(`Scene ${project.scenes.indexOf(j.scene) + 1} has no text, and there are no characters.`, true); return; }
   if (!(await checkConn())) { setStatus("Local Dream isn't reachable. See the steps at the top.", true); return; }
@@ -972,7 +1001,8 @@ async function runJobs(jobs) {
   const total = jobs.reduce((n, j) => n + (j.scene.frames - j.from), 0);
   let done = 0; const t0 = performance.now();
   abortCtl = new AbortController(); setBusy(true); keepAwake(true);
-  const seed0 = baseSeed(), lock = $("lockSeed").checked;
+  if (opts.fresh && $("seed").value.trim() === "") project.seed = rndSeed();
+  const seed0 = opts.fresh ? (baseSeed() + 1 + Math.floor(Math.random() * 1e6)) % 2147483647 : baseSeed(), lock = $("lockSeed").checked;
   let noiseChecked = false;
   try {
     for (const job of jobs) {
@@ -1013,8 +1043,28 @@ $("genBtn").addEventListener("click", () => {
     if (s.edited) jobs.push({ scene: s, from: 0 });
     else if (s.imgs.length < s.frames) jobs.push({ scene: s, from: s.imgs.length });
   });
-  if (!jobs.length) { setStatus("Every scene is ready. Edit a scene or tap Redo scene to change it."); return; }
+  if (!jobs.length) {
+    if (confirm("Every frame is already made. Make all frames again with new seeds?")) redoAll();
+    return;
+  }
   runJobs(jobs);
+});
+// Redo jobs from scene si, frame k, through the end of the video (later scenes grow out of earlier ones).
+function jobsFrom(si, k) {
+  return project.scenes.slice(si).map((s, j) => ({ scene: s, from: j === 0 ? k : 0 })).filter((j) => j.scene.frames > j.from);
+}
+function redoAll() { runJobs(jobsFrom(0, 0), { fresh: true }); }
+$("redoAll").addEventListener("click", () => {
+  if (busy) return;
+  if (!allFrames().length) { $("genBtn").click(); return; }
+  if (confirm("Make every frame again with new seeds? The current frames will be replaced.")) redoAll();
+});
+$("clearFrames").addEventListener("click", () => {
+  if (busy || !allFrames().length) return;
+  if (!confirm("Delete all frames? Your characters, scenes and settings stay.")) return;
+  project.scenes.forEach((s) => { s.imgs.forEach((m) => dropUrl(m.blob)); s.imgs = []; s.edited = false; refreshCard(s); });
+  stopPreview(); updateTotals(); saveProject(true);
+  setStatus("All frames cleared. Tap Generate to make them again.");
 });
 $("stopBtn").addEventListener("click", () => { if (abortCtl) abortCtl.abort(); });
 
@@ -1026,8 +1076,8 @@ function openFrame(sceneId, k) {
   const si = project.scenes.indexOf(s);
   $("h-frame").textContent = `Scene ${si + 1} · frame ${k + 1}`;
   $("fdImg").src = urlFor(s.imgs[k].blob);
-  $("fdMeta").textContent = `Seed ${s.imgs[k].seed}. Redo makes a new version from the frame before it.`;
-  $("fdRedo").disabled = busy; $("fdDelete").disabled = busy;
+  $("fdMeta").textContent = `Seed ${s.imgs[k].seed}. "Redo from here" remakes this frame and every frame after it, so later frames follow the new one. "Redo only this frame" leaves the rest as they are.`;
+  $("fdRedo").disabled = busy; $("fdRedoOn").disabled = busy; $("fdDelete").disabled = busy;
   $("frameDlg").showModal();
 }
 $("fdSave").addEventListener("click", () => {
@@ -1039,6 +1089,11 @@ $("fdDelete").addEventListener("click", () => {
   const [m] = s.imgs.splice(k, 1); if (m) dropUrl(m.blob);
   if (s.frames > 1) s.frames--;
   $("frameDlg").close(); refreshCard(s); updateTotals(); saveProject();
+});
+$("fdRedoOn").addEventListener("click", () => {
+  if (busy || !openRef) return; const { s, k } = openRef; const si = project.scenes.indexOf(s);
+  $("frameDlg").close();
+  runJobs(jobsFrom(si, k), { fresh: true });
 });
 $("fdRedo").addEventListener("click", async () => {
   if (busy || !openRef) return; const { s, k } = openRef; const si = project.scenes.indexOf(s);
@@ -1064,10 +1119,15 @@ $("modelType").addEventListener("change", () => { fillResolutions(); saveSetting
 $("resolution").addEventListener("change", showMaskInfo);
 SET_IDS.forEach((id) => $(id).addEventListener("change", () => { saveSettings(); updateTotals(); }));
 $("negative").addEventListener("input", saveSettings);
+$("framesAll").addEventListener("click", () => {
+  if (busy) return; const n = defFrames(); $("sceneFrames").value = n; saveSettings();
+  project.scenes.forEach((s) => setFrames(s, n));
+  setStatus(`Every scene is now ${n} frame${n === 1 ? "" : "s"}.`);
+});
 $("newProject").addEventListener("click", () => {
   if (busy || !confirm("Start a new project? All scenes and frames on this page will be deleted.")) return;
   allFrames().forEach((m) => dropUrl(m.blob)); if (project.photo) dropUrl(project.photo);
-  project = { character: "", subject: "none", motion: "balanced", seed: rndSeed(), photo: null, mask: null, maskAspect: 1, maskPct: 100, scenes: [newScene("", 4)] };
+  project = { character: "", subject: "none", motion: "balanced", seed: rndSeed(), photo: null, mask: null, maskAspect: 1, maskPct: 100, scenes: [newScene("")] };
   maskCache = null;
   $("seed").value = ""; syncInputs(); renderScenes(); saveProject(true);
   $("settingsDlg").close(); setStatus("New project started.");
@@ -1228,19 +1288,8 @@ $("saveVid").addEventListener("click", () => { if (lastVideo) download(lastVideo
 (async () => {
   loadSettings();
   const had = await loadProject();
-  if (!had) {
-    // A small example so the page shows how it works. Replace it with your own story.
-    project.character = "an orange striped cartoon cat and a small white mouse, flat colors, thick outlines, green meadow, blue sky";
-    project.scenes = [
-      newScene("the mouse runs to the right, the cat chases close behind", 4),
-      newScene("the mouse leaps over a dark pit in the ground", 3),
-      newScene("the cat skids at the edge of the pit, eyes wide", 3),
-      newScene("the cat falls into the pit, only its ears visible", 4),
-    ];
-    project.scenes[3].move = "in";
-  }
   syncInputs(); renderScenes();
-  setStatus(had ? "Welcome back. Your project was restored." : "Example story loaded. Edit the text, then tap Generate.");
+  setStatus(had ? "Welcome back. Your project was restored." : "Describe the characters (optional), write what each scene shows, then tap Generate.");
   if (!autosaveOk) $("status").textContent += " (Autosave isn't available here, so keep this page open.)";
   checkConn();
 })();
