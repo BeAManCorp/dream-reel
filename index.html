@@ -338,18 +338,19 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
 <dialog id="maskDlg" aria-labelledby="h-mask">
   <div class="dlg">
     <div class="dlg-head"><h2 id="h-mask">What can change</h2></div>
-    <p class="sub" id="maskNote">Amber areas can change. Rub out (unmark) the parts that must stay exactly as they are. Scenes with a camera move ignore this.</p>
+    <p class="sub" id="maskNote">Paint only the area that may change (it turns amber). Everything you don't paint stays exactly as it is.</p>
     <div class="mask-stage"><canvas id="maskView" aria-label="Start image with the changeable area in amber"></canvas></div>
     <div class="seg two" role="group" aria-label="Brush">
-      <button type="button" data-tool="keep" aria-pressed="true">Unmark (keep)</button>
-      <button type="button" data-tool="change" aria-pressed="false">Mark (can change)</button>
+      <button type="button" data-tool="change" aria-pressed="true">Paint: can change</button>
+      <button type="button" data-tool="keep" aria-pressed="false">Erase: keep</button>
     </div>
     <label class="field" for="brush"><span class="range-head"><span>Brush size</span><output id="brushOut">40</output></span>
       <input type="range" id="brush" min="8" max="140" value="40">
     </label>
     <div class="btns">
-      <button class="btn" type="button" id="maskAll">Mark everything</button>
-      <button class="btn" type="button" id="maskNone">Unmark everything</button>
+      <button class="btn" type="button" id="maskNone">Clear</button>
+      <button class="btn" type="button" id="maskInvert">Invert</button>
+      <button class="btn" type="button" id="maskAll">Everything</button>
     </div>
     <p class="note-err" id="maskErr" aria-live="polite"></p>
     <div class="btns">
@@ -1329,10 +1330,10 @@ async function openMask(target = null) {
   const si = target ? project.scenes.indexOf(target) : -1;
   $("h-mask").textContent = target ? `Scene ${si + 1}: what can change` : "What can change";
   $("maskNote").textContent = target
-    ? "This is the image this scene starts from. Amber areas can change; unmark the parts that must stay as they are in every frame of this scene." +
+    ? "This is the image this scene starts from. Paint only the area that may change (it turns amber). Everything you don't paint stays exactly as it is in every frame of this scene." +
       (bg ? "" : " There's no previous image yet, so you're marking areas on a blank grid. Generate the scene before it to see what you're marking.") +
       (target.move !== "none" ? " This scene has a camera move, so the mask is ignored until you set it to Camera still." : "")
-    : "Amber areas can change. Rub out (unmark) the parts that must stay exactly as they are. Scenes with their own mask or a camera move ignore this.";
+    : "Paint only the area that may change (it turns amber). Everything you don't paint stays exactly as it is. Scenes with their own mask or a camera move ignore this.";
   const mask = document.createElement("canvas"); mask.width = ew; mask.height = eh; const mctx = mask.getContext("2d");
   if (cur) {
     // Stored mask is white/black; turn it into "opaque = can change" for editing.
@@ -1342,10 +1343,10 @@ async function openMask(target = null) {
     const src = tctx.getImageData(0, 0, ew, eh), out = mctx.createImageData(ew, eh);
     for (let i = 0; i < src.data.length; i += 4) { out.data[i] = out.data[i + 1] = out.data[i + 2] = 255; out.data[i + 3] = src.data[i] > 127 ? 255 : 0; }
     mctx.putImageData(out, 0, 0);
-  } else { mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, ew, eh); }
+  } // no saved choice: start with nothing marked, so painting marks what can change
   const view = $("maskView"); view.width = ew; view.height = eh;
   Object.assign(ME, { view, ctx: view.getContext("2d"), photo, mask, mctx, down: false, last: null, target });
-  setTool("keep"); $("maskErr").textContent = ""; drawMaskView();
+  setTool("change"); $("maskErr").textContent = ""; drawMaskView();
   $("maskDlg").showModal();
 }
 function drawMaskView() {
@@ -1359,7 +1360,7 @@ function setTool(t) { ME.tool = t; document.querySelectorAll("#maskDlg [data-too
 document.querySelectorAll("#maskDlg [data-tool]").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
 function maskPoint(e) { const r = ME.view.getBoundingClientRect(); const sx = ME.view.width / r.width; return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sx, scale: sx }; }
 function paint(a, b) {
-  const c = ME.mctx; const size = parseFloat($("brush").value) || 40;
+  const c = ME.mctx; const size = parseFloat($("brush").value) || 40; $("maskErr").textContent = "";
   c.globalCompositeOperation = ME.tool === "keep" ? "destination-out" : "source-over";
   c.strokeStyle = "#fff"; c.fillStyle = "#fff"; c.lineCap = "round"; c.lineJoin = "round"; c.lineWidth = size * a.scale;
   c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x + 0.01, b.y); c.stroke();
@@ -1371,6 +1372,11 @@ $("maskView").addEventListener("pointermove", (e) => { if (!ME.down) return; con
 ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => $("maskView").addEventListener(ev, () => { ME.down = false; ME.last = null; }));
 $("brush").addEventListener("input", () => { $("brushOut").textContent = $("brush").value; });
 $("maskAll").addEventListener("click", () => { ME.mctx.globalCompositeOperation = "source-over"; ME.mctx.fillStyle = "#fff"; ME.mctx.fillRect(0, 0, ME.mask.width, ME.mask.height); drawMaskView(); });
+$("maskInvert").addEventListener("click", () => {
+  const c = ME.mctx, w = ME.mask.width, h = ME.mask.height, d = c.getImageData(0, 0, w, h);
+  for (let i = 0; i < d.data.length; i += 4) { d.data[i] = d.data[i + 1] = d.data[i + 2] = 255; d.data[i + 3] = d.data[i + 3] > 127 ? 0 : 255; }
+  c.putImageData(d, 0, 0); drawMaskView();
+});
 $("maskNone").addEventListener("click", () => { ME.mctx.clearRect(0, 0, ME.mask.width, ME.mask.height); drawMaskView(); });
 $("maskCancel").addEventListener("click", () => $("maskDlg").close());
 $("maskSave").addEventListener("click", async () => {
@@ -1378,7 +1384,7 @@ $("maskSave").addEventListener("click", async () => {
   const a = ME.mctx.getImageData(0, 0, w, h).data; let on = 0;
   for (let i = 3; i < a.length; i += 4) if (a[i] > 127) on++;
   const pct = Math.round((on / (w * h)) * 100);
-  if (on === 0) { $("maskErr").textContent = "Nothing is marked, so nothing could change. Mark at least some area."; return; }
+  if (on === 0) { $("maskErr").textContent = "Nothing is painted yet. Paint the area that may change, or tap Cancel."; return; }
   let blob = null;
   if (pct < 99) {
     const out = document.createElement("canvas"); out.width = w; out.height = h; const o = out.getContext("2d");

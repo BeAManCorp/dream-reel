@@ -1,6 +1,6 @@
 // Dream Reel offline support: keeps a copy of the app so it opens without internet.
 // It only handles this site's own files. Requests to Local Dream (127.0.0.1) are never touched.
-const CACHE = "dream-reel-v6";
+const CACHE = "dream-reel-v7";
 const FILES = ["./", "./index.html", "./dream-reel-full.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {
