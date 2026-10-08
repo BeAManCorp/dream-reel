@@ -1,1 +1,40 @@
-# dream-reel
+# Dream Reel
+
+Turn a short story into a video on an Android phone, fully offline, using [Local Dream](https://github.com/xororz/local-dream) to generate the frames.
+
+You write scenes, Dream Reel asks Local Dream for each frame (each frame grows out of the one before it), and it joins the frames into an MP4.
+
+## Files
+
+| File | What it is |
+| --- | --- |
+| `index.html` | **Dream Reel Lite**, the simple version. Scene cards, a characters box, an optional start image with a "what can change" mask, preview, and MP4 export. Start here. |
+| `dream-reel-full.html` | The full version with every setting visible: action timeline, photo and video sources, video restyling, and separate strength sliders. |
+
+Each page is one self-contained HTML file with no outside libraries.
+
+## Using it on the phone
+
+1. In Local Dream, open an NPU model and wait until it has loaded, then press **Home** (not Back) so it keeps running.
+2. Download `index.html` to the phone and open it in Chrome from the Files app.
+3. Check that the status button says **Connected**. If Chrome asks to allow access to devices on your network, allow it.
+4. Describe the characters, write one line per scene, and set the frames per scene. Then tap **Generate**.
+5. Tap **Preview** to watch it, then **Make video** and **Save video**.
+
+Generate only makes what's missing: new scenes, edited scenes, and extra frames. Tap any frame to redo it, delete it, or save it as an image. Work autosaves in the phone's browser storage.
+
+## Privacy
+
+The pages only talk to Local Dream's engine on the same phone at `http://127.0.0.1:8081`. A Content-Security-Policy in each file blocks every other network request, so nothing is uploaded.
+
+While Local Dream is open, its engine also accepts requests from other web pages in Chrome. Close Local Dream when you're not using it, and leave its "Allow LAN access" and "Host mode" settings off.
+
+## Limits
+
+- **Prompt length:** Stable Diffusion 1.5 reads about 75 tokens per prompt and ignores the rest. Each scene card shows the count from Local Dream.
+- **Not a video model:** smooth motion comes from small changes between frames, camera moves, and blending. Two characters in fast action are hard for these models.
+- **Resolution:** only the sizes your downloaded NPU model lists in Local Dream will work. CPU models support squares up to 512 × 512.
+
+## Hosting
+
+This repo is private, and GitHub's free plan only serves Pages sites from public repos. To open the app from a web address instead of a downloaded file, either make the repo public or use a paid plan, then turn on **Settings → Pages** (deploy from `main`, root folder).

@@ -1,0 +1,1180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob: data:; connect-src http://127.0.0.1:8081 http://localhost:8081; form-action 'none'; base-uri 'none'">
+<title>Dream Reel</title>
+<!--
+  Dream Reel: animate a character with Local Dream, offline.
+  Privacy: the Content-Security-Policy above only allows network requests to
+  Local Dream's engine on this phone (127.0.0.1:8081). Nothing loads from or
+  is sent to the internet.
+-->
+<style>
+/* Layout: one column of four stages (Source, Character + action timeline, Generate, Video); the film strip is the centrepiece. */
+:root {
+  --bg: #eceef3; --surface: #ffffff; --raised: #f5f6f9; --ink: #171920; --muted: #5b6172;
+  --line: #d5d8e0; --accent: #a8600a; --accent-fg: #fff8ee; --film: #1a1c22; --film-ink: #c9ccd6;
+  --ok: #2b7a4b; --bad: #b3261e; --seg-s: 55%; --seg-l: 40%;
+  --f-body: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --f-mono: ui-monospace, "Roboto Mono", "Droid Sans Mono", "SFMono-Regular", Menlo, monospace;
+  --r: 14px; color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101217; --surface: #181b22; --raised: #1f232b; --ink: #e7e9ee; --muted: #9ba1af;
+    --line: #2a2f39; --accent: #f0a845; --accent-fg: #1c1306; --film: #08090c; --film-ink: #b9bdc8;
+    --ok: #5cc48a; --bad: #f2867d; --seg-s: 50%; --seg-l: 38%; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101217; --surface: #181b22; --raised: #1f232b; --ink: #e7e9ee; --muted: #9ba1af;
+  --line: #2a2f39; --accent: #f0a845; --accent-fg: #1c1306; --film: #08090c; --film-ink: #b9bdc8;
+  --ok: #5cc48a; --bad: #f2867d; --seg-s: 50%; --seg-l: 38%; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink); font: 15px/1.5 var(--f-body);
+  padding: max(16px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-block: 4px 2px; }
+h1 { font-size: 1.6rem; line-height: 1.1; margin: 0; letter-spacing: -0.02em; font-weight: 800; }
+h1 span { color: var(--accent); }
+.sub { color: var(--muted); font-size: .85rem; margin: 2px 0 0; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); border-radius: 999px; padding: 6px 12px; font: 600 .8rem var(--f-body); cursor: pointer;
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.pill[data-state="ok"] .dot { background: var(--ok); }
+.pill[data-state="bad"] .dot { background: var(--bad); }
+.help { border: 1px solid var(--line); background: var(--raised); border-radius: var(--r); padding: 12px 14px; font-size: .88rem; color: var(--muted); }
+.help strong { color: var(--ink); }
+.help ol { margin: 6px 0 0; padding-left: 20px; }
+
+section.stage { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.stage-head { display: flex; align-items: baseline; gap: 10px; }
+.stage-no { font: 700 .75rem var(--f-mono); color: var(--accent); letter-spacing: .08em; }
+.stage-head h2 { margin: 0; font-size: 1.05rem; letter-spacing: -0.01em; }
+h3 { margin: 0; font-size: .95rem; }
+
+.seg-ctl { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--raised); border: 1px solid var(--line); border-radius: 12px; padding: 4px; gap: 4px; }
+.seg-ctl button { border: 0; background: transparent; color: var(--muted); font: 600 .9rem var(--f-body); padding: 10px 6px; border-radius: 9px; cursor: pointer; }
+.seg-ctl button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+
+.picker { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.preview { width: 88px; height: 88px; border-radius: 10px; background: var(--raised); border: 1px dashed var(--line); flex: none; display: grid; place-items: center; color: var(--muted); font-size: .75rem; overflow: hidden; }
+.preview img, .preview video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.picker-info { min-width: 0; flex: 1 1 160px; font-size: .85rem; color: var(--muted); overflow-wrap: anywhere; }
+
+label.field { display: flex; flex-direction: column; gap: 6px; font-size: .85rem; font-weight: 600; min-width: 0; }
+label.field small { font-weight: 400; color: var(--muted); }
+textarea, input[type="number"], input[type="text"], select {
+  width: 100%; font: 400 .95rem var(--f-body); color: var(--ink); background: var(--raised);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-width: 0;
+}
+textarea { min-height: 80px; resize: vertical; line-height: 1.45; }
+input[type="number"] { font-family: var(--f-mono); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+.range-head { display: flex; justify-content: space-between; gap: 8px; }
+.range-head output { font: 600 .85rem var(--f-mono); color: var(--accent); }
+.check { display: flex; gap: 10px; align-items: center; font-size: .9rem; }
+.check input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+details { border-top: 1px solid var(--line); padding-top: 12px; }
+summary { cursor: pointer; font-weight: 600; font-size: .9rem; color: var(--muted); }
+details[open] summary { margin-bottom: 12px; }
+details > .inner { display: flex; flex-direction: column; gap: 12px; }
+.note { font-size: .8rem; color: var(--muted); margin: 0; }
+.estimate { font: 500 .85rem var(--f-mono); color: var(--muted); margin: 0; }
+.warn { color: var(--bad); }
+pre.final { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 .8rem/1.5 var(--f-mono); background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--ink); }
+
+/* Action timeline */
+.tl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.tl-bar { display: flex; gap: 3px; height: 34px; margin-top: 8px; }
+.tl-seg {
+  flex: 1 1 0; min-width: 0; border-radius: 6px; background: hsl(var(--h) var(--seg-s) var(--seg-l)); color: #fff;
+  font: 600 .7rem var(--f-mono); display: grid; place-items: center; overflow: hidden; white-space: nowrap; padding: 0 4px; text-overflow: ellipsis;
+  opacity: .5; transition: opacity .2s;
+}
+.tl-seg.done { opacity: 1; }
+.tl-seg.now { opacity: 1; outline: 2px solid var(--ink); outline-offset: 1px; }
+.tl-bar.idle .tl-seg { opacity: 1; }
+ol.acts { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.act {
+  display: grid; grid-template-columns: 1fr; gap: 8px; background: var(--raised); border: 1px solid var(--line);
+  border-left: 5px solid hsl(var(--h) var(--seg-s) var(--seg-l)); border-radius: 12px; padding: 10px; min-width: 0;
+}
+.act-top { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.badge { font: 700 .75rem var(--f-mono); color: #fff; background: hsl(var(--h) var(--seg-s) var(--seg-l)); border-radius: 6px; padding: 3px 8px; }
+.act-top .spacer { flex: 1 1 auto; }
+.act-frames { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--muted); }
+.act-frames input { width: 60px; padding: 8px 6px; }
+.icon { width: 36px; height: 36px; flex: none; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 10px; font: 700 1rem var(--f-body); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.icon:disabled { opacity: .35; cursor: not-allowed; }
+.act textarea { min-height: 56px; }
+
+.btn { border: 1px solid var(--line); background: var(--raised); color: var(--ink); font: 700 .95rem var(--f-body); border-radius: 12px; padding: 12px 16px; cursor: pointer; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.actions .btn.primary { flex: 1 1 180px; }
+#addAct { align-self: flex-start; }
+
+.progress { height: 8px; background: var(--raised); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.progress > div { height: 100%; width: 0%; background: var(--accent); transition: width .2s ease; }
+.status { font-size: .88rem; color: var(--muted); min-height: 1.4em; margin: 0; overflow-wrap: anywhere; }
+.status.err { color: var(--bad); }
+
+/* Film strip */
+.film { background: var(--film); border-radius: 12px; padding: 14px 0; position: relative; overflow-x: auto; overscroll-behavior-x: contain; }
+.film::before, .film::after {
+  content: ""; position: sticky; left: 0; display: block; height: 6px; margin: 0 10px;
+  background: repeating-linear-gradient(90deg, rgba(255,255,255,.22) 0 8px, transparent 8px 18px); border-radius: 2px;
+}
+.film::before { margin-bottom: 10px; }
+.film::after { margin-top: 10px; }
+.strip { display: flex; gap: 8px; padding: 0 12px; width: max-content; min-height: 120px; align-items: flex-start; }
+.strip .empty { color: var(--film-ink); font-size: .85rem; padding: 40px 6px; opacity: .8; width: min(560px, calc(100vw - 80px)); }
+.frame { border: 2px solid transparent; background: none; padding: 0; cursor: pointer; display: flex; flex-direction: column; gap: 4px; border-radius: 6px; }
+.frame .tag { height: 4px; border-radius: 3px; background: hsl(var(--h, 0) var(--seg-s) 55%); }
+.frame.notag .tag { background: transparent; }
+.frame img { width: 96px; height: 96px; object-fit: cover; border-radius: 4px; display: block; background: #222; }
+.frame span { font: 500 .68rem/1.3 var(--f-mono); color: var(--film-ink); text-align: left; padding-left: 2px; font-variant-numeric: tabular-nums; }
+.frame[aria-pressed="true"] { border-color: var(--accent); }
+.selbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.selbar img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; }
+.selbar .meta { flex: 1 1 140px; font-size: .82rem; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+
+video.out { width: 100%; max-width: 100%; border-radius: 12px; background: #000; display: block; }
+footer { font-size: .78rem; color: var(--muted); text-align: center; padding: 6px 8px 0; }
+@media (prefers-reduced-motion: reduce) { .progress > div, .tl-seg { transition: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>Dream <span>Reel</span></h1>
+      <p class="sub">Animate a character with Local Dream, offline</p>
+    </div>
+    <button class="pill" id="conn" type="button" data-state="idle" aria-live="polite"><span class="dot"></span><span id="connText">Checking…</span></button>
+  </header>
+
+  <div class="help" id="connHelp" hidden>
+    <strong>Can't reach Local Dream.</strong>
+    <ol>
+      <li>Open Local Dream and tap a model so it finishes loading.</li>
+      <li>Press Home (not Back), then return to this page.</li>
+      <li>Tap the status button above to check again. If Chrome asks to allow access to devices on your network, allow it.</li>
+    </ol>
+  </div>
+
+  <!-- 1. Source -->
+  <section class="stage" aria-labelledby="h-source">
+    <div class="stage-head"><span class="stage-no">01</span><h2 id="h-source">Start from</h2></div>
+    <div class="seg-ctl" role="group" aria-label="Source">
+      <button type="button" data-mode="text" aria-pressed="true">Text</button>
+      <button type="button" data-mode="photo" aria-pressed="false">Photo</button>
+      <button type="button" data-mode="video" aria-pressed="false">Video</button>
+    </div>
+    <div class="picker" id="picker" hidden>
+      <div class="preview" id="srcPreview">None</div>
+      <div class="picker-info">
+        <button class="btn" type="button" id="pickBtn">Choose from gallery</button>
+        <p class="note" id="srcInfo" style="margin-top:8px">No file chosen</p>
+      </div>
+      <input type="file" id="fileInput" hidden>
+    </div>
+    <label class="field" for="subject">This is a
+      <select id="subject" data-persist>
+        <option value="none">Not marked</option>
+        <option value="person">Person</option>
+        <option value="object">Object</option>
+      </select>
+      <small id="subjectHint">Marking it adds consistency wording to every prompt so the look is kept.</small>
+    </label>
+    <p class="note" id="modeNote"></p>
+  </section>
+
+  <!-- 2. Character + actions -->
+  <section class="stage" aria-labelledby="h-prompt">
+    <div class="stage-head"><span class="stage-no">02</span><h2 id="h-prompt">Character and actions</h2></div>
+
+    <label class="field" for="staticPrompt"><span id="staticLabel">Character</span>
+      <small id="staticHint">How the character looks. Added to every frame. Leave it empty to skip it.</small>
+      <textarea id="staticPrompt" data-persist>a 32 year old woman, sharp features, dark hair in a messy low bun, glasses resting on her head, rolled-up dark blazer, charcoal blouse, dark server room, blue LED lights, cinematic lighting, photorealistic</textarea>
+    </label>
+
+    <div id="timelineBlock">
+      <div class="tl-head">
+        <h3>Actions</h3>
+        <p class="estimate" id="tlTotal"></p>
+      </div>
+      <div class="tl-bar idle" id="tlBar" role="img" aria-label="Timeline of actions"></div>
+      <ol class="acts" id="acts"></ol>
+      <button class="btn" type="button" id="addAct">+ Add action</button>
+      <p class="note" style="margin-top:8px">One action per box, with how many frames it lasts. Each frame's prompt is the character followed by the action.</p>
+    </div>
+
+    <div class="row" id="vidRow" hidden>
+      <label class="field" for="sampleFps">Frames per second
+        <input type="number" id="sampleFps" min="1" max="15" value="6" inputmode="numeric" data-persist>
+      </label>
+      <label class="field" for="maxSec">Use first (seconds)
+        <input type="number" id="maxSec" min="1" max="60" value="4" inputmode="decimal" data-persist>
+      </label>
+    </div>
+
+    <label class="field" for="strength">
+      <span class="range-head"><span>Change per frame</span><output id="strengthOut">0.35</output></span>
+      <input type="range" id="strength" min="0.1" max="0.9" step="0.05" value="0.35" data-persist>
+      <small id="strengthHint">Low keeps frames consistent, high lets them change more.</small>
+    </label>
+
+    <label class="field" for="actStrength" id="actStrengthWrap">
+      <span class="range-head"><span>Change when an action starts</span><output id="actStrengthOut">0.60</output></span>
+      <input type="range" id="actStrength" min="0.2" max="0.9" step="0.05" value="0.6" data-persist>
+      <small>The first frame of each action changes more, so the pose can switch.</small>
+    </label>
+
+    <label class="field" for="anchor" id="anchorWrap">
+      <span class="range-head"><span>Keep the look of the reference</span><output id="anchorOut">0.25</output></span>
+      <input type="range" id="anchor" min="0" max="0.6" step="0.05" value="0.25" data-persist>
+      <small id="anchorHint">Blends the reference back in before each frame so the character doesn't drift.</small>
+    </label>
+
+    <details>
+      <summary>Advanced settings</summary>
+      <div class="inner">
+        <label class="field" for="keepPos">Consistency wording <small>Added to every prompt when the subject is marked as a person or object. Edit freely.</small>
+          <textarea id="keepPos" rows="3"></textarea>
+        </label>
+        <label class="field" for="keepNeg">Consistency negatives <small>Added to the negative prompt in the same case.</small>
+          <textarea id="keepNeg" rows="2"></textarea>
+        </label>
+        <label class="field" for="negative">Negative prompt <small>Things to avoid</small>
+          <input type="text" id="negative" value="blurry, lowres, bad anatomy, watermark, text" data-persist>
+        </label>
+        <div class="row">
+          <label class="field" for="steps">Steps
+            <input type="number" id="steps" min="1" max="50" value="30" inputmode="numeric" data-persist>
+          </label>
+          <label class="field" for="cfg">Prompt strength (CFG)
+            <input type="number" id="cfg" min="1" max="20" step="0.5" value="7" inputmode="decimal" data-persist>
+          </label>
+        </div>
+        <div class="row">
+          <label class="field" for="scheduler">Sampler
+            <select id="scheduler" data-persist>
+              <option value="dpm">DPM++ 2M</option>
+              <option value="dpm_karras">DPM++ 2M Karras</option>
+              <option value="euler_a">Euler A</option>
+              <option value="euler">Euler</option>
+              <option value="dpm_sde">DPM++ 2M SDE</option>
+              <option value="lcm">LCM</option>
+            </select>
+          </label>
+          <label class="field" for="modelType">Model type
+            <select id="modelType" data-persist>
+              <option value="npu">NPU model</option>
+              <option value="cpu">CPU model</option>
+            </select>
+          </label>
+        </div>
+        <label class="field" for="resolution">Resolution
+          <select id="resolution" data-persist></select>
+          <small id="resHint"></small>
+        </label>
+        <div class="row">
+          <label class="field" for="seed">Seed <small>Blank = random</small>
+            <input type="number" id="seed" min="0" max="2147483647" placeholder="random" inputmode="numeric">
+          </label>
+          <label class="check" for="lockSeed"><input type="checkbox" id="lockSeed" checked data-persist> Same seed for every frame (steadier)</label>
+        </div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Show the prompt sent for the first action</summary>
+      <div class="inner">
+        <pre class="final" id="finalPos"></pre>
+        <pre class="final" id="finalNeg"></pre>
+        <p class="estimate" id="tokenNote"></p>
+      </div>
+    </details>
+    <p class="estimate" id="estimate"></p>
+  </section>
+
+  <!-- 3. Generate -->
+  <section class="stage" aria-labelledby="h-gen">
+    <div class="stage-head"><span class="stage-no">03</span><h2 id="h-gen">Generate frames</h2></div>
+    <div class="actions">
+      <button class="btn primary" type="button" id="genBtn">Generate frames</button>
+      <button class="btn danger" type="button" id="stopBtn" hidden>Stop</button>
+    </div>
+    <div class="progress" aria-hidden="true"><div id="genBar"></div></div>
+    <p class="status" id="genStatus" aria-live="polite">Keep this page open while frames generate.</p>
+    <div class="film" id="film">
+      <div class="strip" id="strip"><div class="empty">Your frames will appear here.</div></div>
+    </div>
+    <div class="selbar" id="selbar" hidden>
+      <img id="selImg" alt="Selected frame">
+      <div class="meta" id="selMeta"></div>
+      <div class="actions">
+        <button class="btn" type="button" id="saveFrameBtn">Save image</button>
+        <button class="btn danger" type="button" id="removeFrameBtn">Remove</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Video -->
+  <section class="stage" aria-labelledby="h-vid">
+    <div class="stage-head"><span class="stage-no">04</span><h2 id="h-vid">Make video</h2></div>
+    <div class="row">
+      <label class="field" for="hold">Seconds per frame
+        <input type="number" id="hold" min="0.04" max="10" step="0.05" value="0.5" inputmode="decimal">
+      </label>
+      <label class="field" for="motion">Camera motion
+        <select id="motion" data-persist>
+          <option value="none">None</option>
+          <option value="in">Slow zoom in</option>
+          <option value="out">Slow zoom out</option>
+          <option value="pan">Slow pan</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label class="field" for="fps">Video FPS
+        <select id="fps" data-persist>
+          <option value="24">24</option>
+          <option value="30" selected>30</option>
+        </select>
+      </label>
+      <label class="field" for="outSize">Video size (long side)
+        <select id="outSize" data-persist>
+          <option value="512">512 px</option>
+          <option value="720" selected>720 px</option>
+          <option value="1024">1024 px</option>
+        </select>
+      </label>
+    </div>
+    <label class="check" for="fade"><input type="checkbox" id="fade" checked data-persist> Blend smoothly between frames</label>
+    <label class="check" for="boomerang"><input type="checkbox" id="boomerang" data-persist> Play forward then backward (loop)</label>
+    <p class="estimate" id="vidEstimate"></p>
+    <div class="actions">
+      <button class="btn primary" type="button" id="vidBtn" disabled>Make video</button>
+    </div>
+    <div class="progress" aria-hidden="true"><div id="vidBar"></div></div>
+    <p class="status" id="vidStatus" aria-live="polite"></p>
+    <video class="out" id="outVideo" controls playsinline loop hidden></video>
+    <div class="actions" id="saveRow" hidden>
+      <button class="btn primary" type="button" id="saveVidBtn">Save video</button>
+    </div>
+  </section>
+
+  <footer>This page only talks to Local Dream on this phone (127.0.0.1:8081). Nothing is uploaded anywhere.</footer>
+</div>
+
+<script>
+"use strict";
+(() => {
+const API = "http://127.0.0.1:8081";
+const $ = (id) => document.getElementById(id);
+
+// ---------- state ----------
+let mode = "text";
+let source = null;      // { kind: "photo"|"video", file, url, ... }
+let frames = [];        // { blob, url, prompt, seed, action }
+let selected = -1;
+let genAbort = null;
+let busy = false;
+let lastVideo = null;   // { blob, url, name }
+let actions = [
+  { text: "standing at a server rack, focused expression, looking at the screen", frames: 4 },
+  { text: "typing fast on a laptop, screen glow on her face", frames: 4 },
+  { text: "turning to the camera with a slight mischievous smirk", frames: 4 },
+];
+
+// What gets added to prompts when the subject is marked.
+const KEEP = {
+  person: {
+    pos: "same person, same face, same facial features, same hairstyle and hair color, same skin tone, same eye color, same body shape, same clothing and outfit, consistent identity, consistent character",
+    neg: "different person, changed face, different hairstyle, different hair color, different clothes, different outfit, deformed face, extra limbs",
+  },
+  object: {
+    pos: "same object, same shape, same proportions, same color, same material and texture, same design and details, same markings, consistent appearance",
+    neg: "different object, changed shape, altered color, different material, missing parts, distorted, deformed",
+  },
+};
+
+// ---------- resolution (NPU models offer several; CPU models only small squares) ----------
+const RES = {
+  npu: { list: ["512x512", "512x768", "768x512", "768x768", "768x1024", "1024x768", "1024x1024"], def: "1024x1024",
+         hint: "Only the sizes your downloaded NPU model supports will work. Larger sizes take longer." },
+  cpu: { list: ["256x256", "384x384", "512x512"], def: "512x512", hint: "CPU models only support square sizes up to 512 × 512." },
+};
+function fillResolutions(keep) {
+  const t = RES[$("modelType").value] || RES.npu, sel = $("resolution");
+  const want = keep && t.list.includes(keep) ? keep : t.def;
+  sel.textContent = "";
+  t.list.forEach((v) => { const o = document.createElement("option"); o.value = v; o.textContent = v.replace("x", " × "); sel.appendChild(o); });
+  sel.value = want; $("resHint").textContent = t.hint;
+}
+function getRes() {
+  const [w, h] = $("resolution").value.split("x").map((n) => parseInt(n, 10));
+  return [w || 512, h || 512];
+}
+
+// ---------- small helpers ----------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const num = (id, def) => { const v = parseFloat($(id).value); return Number.isFinite(v) ? v : def; };
+const fmtTime = (s) => { const m = Math.floor(s / 60); return `${String(m).padStart(2, "0")}:${(s - m * 60).toFixed(2).padStart(5, "0")}`; };
+const pad3 = (n) => String(n).padStart(3, "0");
+const hue = (i) => (i * 67 + 20) % 360;
+function blobToB64(blob) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result).split(",")[1]);
+    fr.onerror = () => rej(new Error("Could not read image data"));
+    fr.readAsDataURL(blob);
+  });
+}
+function b64ToBlob(b64, type) {
+  const bin = atob(b64); const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return new Blob([out], { type });
+}
+function canvasToBlob(canvas, type, q) {
+  return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error("Could not encode image"))), type, q));
+}
+function drawCover(ctx, src, sw, sh, w, h) {
+  const s = Math.max(w / sw, h / sh); const dw = sw * s, dh = sh * s;
+  ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+async function coverJpegBlob(src, sw, sh, W, H) {
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d"); ctx.imageSmoothingQuality = "high";
+  drawCover(ctx, src, sw, sh, W, H);
+  return canvasToBlob(c, "image/jpeg", 0.95);
+}
+// Starting image for a frame: the previous frame with some of the reference blended back in.
+async function mixImages(prevBlob, refBlob, a, W, H) {
+  if (!refBlob || prevBlob === refBlob || a < 0.01) return blobToB64(prevBlob);
+  const [pb, rb] = await Promise.all([createImageBitmap(prevBlob), createImageBitmap(refBlob)]);
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const ctx = c.getContext("2d"); ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(pb, 0, 0, W, H);
+  ctx.globalAlpha = a; ctx.drawImage(rb, 0, 0, W, H);
+  pb.close(); rb.close();
+  return blobToB64(await canvasToBlob(c, "image/jpeg", 0.95));
+}
+function download(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+function stamp() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen");
+    if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
+  } catch (_) { /* not available here */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { if (busy) keepAwake(true); checkConn(); } });
+
+// ---------- remembered settings ----------
+const STORE = "dreamreel.v2";
+function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE) || "{}"); } catch (_) {}
+  document.querySelectorAll("[data-persist]").forEach((el) => {
+    if (!(el.id in saved)) return;
+    if (el.type === "checkbox") el.checked = !!saved[el.id]; else el.value = saved[el.id];
+  });
+  if (Array.isArray(saved._actions) && saved._actions.length) {
+    actions = saved._actions.slice(0, 20).map((a) => ({ text: String(a.text || ""), frames: clamp(Math.round(+a.frames || 1), 1, 60) }));
+  }
+}
+function saveSettings() {
+  const out = { _actions: actions };
+  document.querySelectorAll("[data-persist]").forEach((el) => { out[el.id] = el.type === "checkbox" ? el.checked : el.value; });
+  try { localStorage.setItem(STORE, JSON.stringify(out)); } catch (_) {}
+}
+
+// ---------- connection ----------
+async function api(path, opts = {}) {
+  // targetAddressSpace tells newer Chrome this request is for this device.
+  return fetch(API + path, Object.assign({ targetAddressSpace: "loopback" }, opts));
+}
+let connChecking = false;
+async function checkConn() {
+  if (connChecking) return;
+  connChecking = true;
+  const pill = $("conn");
+  pill.dataset.state = "idle"; $("connText").textContent = "Checking…";
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+  let ok = false;
+  try { const r = await api("/health", { signal: ctl.signal }); ok = r.ok; } catch (_) { ok = false; }
+  clearTimeout(t);
+  pill.dataset.state = ok ? "ok" : "bad";
+  $("connText").textContent = ok ? "Local Dream connected" : "Local Dream not found";
+  $("connHelp").hidden = ok;
+  connChecking = false;
+  return ok;
+}
+$("conn").addEventListener("click", checkConn);
+
+// ---------- generation API ----------
+async function generate(p, onStep, signal) {
+  const body = {
+    prompt: p.prompt, negative_prompt: p.negative, steps: p.steps, cfg: p.cfg, scheduler: p.scheduler,
+    seed: p.seed, width: p.W, height: p.H, output_format: "jpeg", preview_format: "jpeg",
+    show_diffusion_process: false,
+  };
+  if (p.image) { body.image = p.image; body.denoise_strength = p.denoise; }
+  const res = await api("/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  if (!res.ok) {
+    let msg = ""; try { msg = await res.text(); } catch (_) {}
+    throw new Error(`Local Dream refused the request (${res.status}). ${msg.slice(0, 200)}`);
+  }
+  const reader = res.body.getReader(); const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let cut;
+    while ((cut = buf.search(/\r?\n\r?\n/)) !== -1) {
+      const block = buf.slice(0, cut); buf = buf.slice(cut).replace(/^\r?\n\r?\n/, "");
+      let ev = "message", data = "";
+      for (const line of block.split(/\r?\n/)) {
+        if (line.startsWith("event:")) ev = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (!data) continue;
+      let j; try { j = JSON.parse(data); } catch (_) { continue; }
+      if (ev === "progress" || j.type === "progress") onStep && onStep(j.step, j.total_steps);
+      else if (ev === "error" || j.type === "error") throw new Error(j.message || "Local Dream reported an error");
+      else if (ev === "complete" || j.type === "complete") {
+        try { reader.cancel(); } catch (_) {}
+        if (j.format !== "jpeg" && j.format !== "png") throw new Error("Unexpected image format from Local Dream");
+        return { b64: j.image, type: j.format === "png" ? "image/png" : "image/jpeg", seed: j.seed, ms: j.generation_time_ms };
+      }
+    }
+  }
+  throw new Error("Local Dream closed the connection before the image was ready");
+}
+
+// ---------- prompt building ----------
+// Every frame prompt = character (only if written) + action line + consistency wording (only if subject is marked).
+function subjectKind() { return $("subject").value; }
+function joinParts(parts) { return parts.map((s) => (s || "").trim().replace(/[,\s]+$/, "")).filter(Boolean).join(", "); }
+function composePrompt(actionText) {
+  const keep = subjectKind() !== "none" ? $("keepPos").value : "";
+  return joinParts([$("staticPrompt").value, actionText, keep]);
+}
+function composeNegative() {
+  const keep = subjectKind() !== "none" ? $("keepNeg").value : "";
+  return joinParts([$("negative").value, keep]);
+}
+function applyKeepDefaults() {
+  const k = KEEP[subjectKind()];
+  $("keepPos").value = k ? k.pos : "";
+  $("keepNeg").value = k ? k.neg : "";
+  $("keepPos").disabled = $("keepNeg").disabled = !k;
+}
+function estTokens(s) { return Math.ceil((s.match(/[\w'-]+|[^\s\w]/g) || []).length * 1.1); }
+
+// ---------- mode & source ----------
+const MODE_NOTES = {
+  text: "The first frame is made from your character and first action. It then becomes the reference that keeps the character steady.",
+  photo: "Your photo is the starting point and the reference. The model can't read the photo's details by itself, so also describe the character below and mark it as a person or object.",
+  video: "Frames are taken from your video and each one is redrawn using your prompt. Mark it as a person or object to keep the look.",
+};
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll(".seg-ctl button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
+  const vid = m === "video";
+  $("picker").hidden = m === "text";
+  $("modeNote").textContent = MODE_NOTES[m];
+  $("timelineBlock").hidden = vid;
+  $("actStrengthWrap").hidden = vid;
+  $("anchorWrap").hidden = vid;
+  $("vidRow").hidden = !vid;
+  $("staticLabel").textContent = vid ? "Style or character" : "Character";
+  $("staticHint").textContent = vid
+    ? "Added to every frame of your video. Leave it empty to skip it."
+    : "How the character looks. Added to every frame. Leave it empty to skip it.";
+  $("anchorHint").textContent = m === "photo"
+    ? "Blends your photo back in before each frame so the character doesn't drift."
+    : "Blends the first frame back in before each later frame so the character doesn't drift.";
+  $("fileInput").accept = vid ? "video/*" : "image/*";
+  $("pickBtn").textContent = vid ? "Choose a video" : "Choose a photo";
+  if (source && source.kind !== m) clearSource();
+  $("strengthHint").textContent = vid
+    ? "How strongly the prompt redraws each video frame. Around 0.4–0.5 keeps the original shapes."
+    : "Low keeps frames consistent, high lets them change more.";
+  refresh();
+}
+document.querySelectorAll(".seg-ctl button").forEach((b) => b.addEventListener("click", () => { if (!busy) setMode(b.dataset.mode); }));
+
+function clearSource() {
+  if (source && source.url) URL.revokeObjectURL(source.url);
+  source = null;
+  $("srcPreview").textContent = "None";
+  $("srcInfo").textContent = "No file chosen";
+}
+$("pickBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  clearSource();
+  const url = URL.createObjectURL(file);
+  const pv = $("srcPreview");
+  pv.textContent = "";
+  if (mode === "video") {
+    const v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.preload = "metadata"; v.src = url;
+    pv.appendChild(v);
+    try {
+      await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("x")); });
+      source = { kind: "video", file, url, duration: v.duration, w: v.videoWidth, h: v.videoHeight };
+      $("srcInfo").textContent = `${file.name} · ${v.duration.toFixed(1)} s · ${v.videoWidth}×${v.videoHeight}`;
+      v.currentTime = Math.min(0.1, v.duration / 2);
+    } catch (_) {
+      URL.revokeObjectURL(url); pv.textContent = "None";
+      $("srcInfo").textContent = "This video can't be read by Chrome. Try an MP4 recorded by your camera.";
+    }
+  } else {
+    const img = document.createElement("img"); img.alt = "Chosen photo"; img.src = url;
+    pv.appendChild(img);
+    try {
+      await img.decode();
+      source = { kind: "photo", file, url, w: img.naturalWidth, h: img.naturalHeight, img };
+      $("srcInfo").textContent = `${file.name} · ${img.naturalWidth}×${img.naturalHeight}. It will be center-cropped to the chosen resolution.`;
+    } catch (_) {
+      URL.revokeObjectURL(url); pv.textContent = "None";
+      $("srcInfo").textContent = "This photo format can't be opened. Pick a JPEG or PNG (HEIC photos may not work).";
+    }
+  }
+  refresh();
+});
+
+// ---------- action timeline ----------
+function renderActs() {
+  const ol = $("acts"); ol.textContent = "";
+  actions.forEach((a, i) => {
+    const li = document.createElement("li"); li.className = "act"; li.style.setProperty("--h", hue(i));
+    const top = document.createElement("div"); top.className = "act-top";
+    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = `A${i + 1}`;
+    const sp = document.createElement("span"); sp.className = "spacer";
+    const fl = document.createElement("label"); fl.className = "act-frames"; fl.htmlFor = `actFrames${i}`;
+    const fi = document.createElement("input"); fi.type = "number"; fi.id = `actFrames${i}`; fi.min = "1"; fi.max = "60"; fi.value = String(a.frames); fi.inputMode = "numeric";
+    fl.append(fi, document.createTextNode("frames"));
+    fi.addEventListener("input", () => { actions[i].frames = clamp(Math.round(+fi.value) || 1, 1, 60); saveSettings(); refresh(true); });
+    const mk = (txt, label, fn, dis) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "icon"; b.textContent = txt;
+      b.setAttribute("aria-label", `${label} action ${i + 1}`); b.disabled = !!dis || busy; b.addEventListener("click", fn); return b;
+    };
+    top.append(badge, sp, fl,
+      mk("↑", "Move up", () => moveAct(i, -1), i === 0),
+      mk("↓", "Move down", () => moveAct(i, 1), i === actions.length - 1),
+      mk("×", "Remove", () => removeAct(i), actions.length === 1));
+    const ta = document.createElement("textarea"); ta.id = `actText${i}`; ta.rows = 2; ta.value = a.text;
+    ta.placeholder = "What is the character doing in this action?";
+    ta.setAttribute("aria-label", `Action ${i + 1}`);
+    ta.addEventListener("input", () => { actions[i].text = ta.value; saveSettings(); refresh(true); });
+    li.append(top, ta); ol.appendChild(li);
+  });
+  $("addAct").disabled = busy || actions.length >= 20;
+}
+function moveAct(i, d) { if (busy) return; const j = i + d; if (j < 0 || j >= actions.length) return; [actions[i], actions[j]] = [actions[j], actions[i]]; saveSettings(); renderActs(); refresh(); }
+function removeAct(i) { if (busy || actions.length === 1) return; actions.splice(i, 1); saveSettings(); renderActs(); refresh(); }
+$("addAct").addEventListener("click", () => {
+  if (busy || actions.length >= 20) return;
+  actions.push({ text: "", frames: 4 }); saveSettings(); renderActs(); refresh();
+  const ta = $(`actText${actions.length - 1}`); if (ta) ta.focus();
+});
+function renderTlBar() {
+  const bar = $("tlBar"); bar.textContent = "";
+  const hold = Math.max(0.04, num("hold", 0.5));
+  actions.forEach((a, i) => {
+    const s = document.createElement("div"); s.className = "tl-seg"; s.style.setProperty("--h", hue(i)); s.style.flexGrow = String(a.frames);
+    s.textContent = `A${i + 1} · ${a.frames}f`; s.title = `Action ${i + 1}: ${a.frames} frames, ${(a.frames * hold).toFixed(1)} s`;
+    bar.appendChild(s);
+  });
+  const total = actions.reduce((n, a) => n + a.frames, 0);
+  $("tlTotal").textContent = `${total} frames · ${(total * hold).toFixed(1)} s`;
+}
+function markTimeline(frameIdx) { // frameIdx = number of frames finished; -1 = idle
+  const bar = $("tlBar"); bar.classList.toggle("idle", frameIdx < 0);
+  let start = 0;
+  [...bar.children].forEach((seg, i) => {
+    const n = actions[i].frames, end = start + n;
+    seg.classList.toggle("done", frameIdx >= end);
+    seg.classList.toggle("now", frameIdx >= start && frameIdx < end);
+    start = end;
+  });
+}
+
+// ---------- plan, estimates, preview ----------
+function plannedFrames() {
+  if (mode === "video") {
+    if (!source || source.kind !== "video") return 0;
+    const fps = clamp(Math.round(num("sampleFps", 6)), 1, 15);
+    const secs = Math.min(source.duration, Math.max(0.1, num("maxSec", 4)));
+    return Math.max(1, Math.floor(secs * fps + 1e-6));
+  }
+  return actions.reduce((n, a) => n + a.frames, 0);
+}
+function buildPlan() {
+  if (mode === "video") {
+    const n = plannedFrames(), prompt = composePrompt("");
+    return Array.from({ length: n }, () => ({ prompt, action: -1, start: false }));
+  }
+  const plan = [];
+  actions.forEach((a, j) => {
+    const prompt = composePrompt(a.text);
+    for (let k = 0; k < a.frames; k++) plan.push({ prompt, action: j, start: k === 0 });
+  });
+  return plan;
+}
+function updatePreview() {
+  const p = mode === "video" ? composePrompt("") : composePrompt(actions[0] ? actions[0].text : "");
+  const n = composeNegative();
+  $("finalPos").textContent = p || "(empty)";
+  $("finalNeg").textContent = n ? `Negative: ${n}` : "Negative: (empty)";
+  const t = estTokens(p);
+  const tn = $("tokenNote");
+  tn.textContent = `About ${t} tokens. ${t > 75 ? "Very long prompts may be partly ignored; shorten the character or action text." : "Within the usual 75-token limit."}`;
+  tn.classList.toggle("warn", t > 75);
+}
+function refresh(light) {
+  $("strengthOut").textContent = Number($("strength").value).toFixed(2);
+  $("actStrengthOut").textContent = Number($("actStrength").value).toFixed(2);
+  $("anchorOut").textContent = Number($("anchor").value).toFixed(2);
+  if (mode !== "video") renderTlBar();
+  const n = plannedFrames();
+  if (mode === "video" && !(source && source.kind === "video")) $("estimate").textContent = "Choose a video to see how many frames it makes.";
+  else if (mode === "photo" && !(source && source.kind === "photo")) $("estimate").textContent = `${n} frames planned. Choose a photo to start.`;
+  else $("estimate").textContent = `${n} frame${n === 1 ? "" : "s"} planned. On the NPU, expect a few seconds per frame.`;
+  $("genBtn").textContent = frames.length ? "Generate again (replaces frames)" : "Generate frames";
+  updatePreview();
+  updateVidEstimate();
+  if (!light) { /* structural changes already re-rendered rows */ }
+}
+function updateVidEstimate() {
+  const n = frames.length;
+  const hold = Math.max(0.04, num("hold", 0.5));
+  const units = $("boomerang").checked && n > 1 ? 2 * n - 2 : n;
+  $("vidEstimate").textContent = n ? `${n} frames × ${hold.toFixed(2)} s${$("boomerang").checked && n > 1 ? " × forward + back" : ""} ≈ ${fmtTime(units * hold)} of video` : "Generate frames first.";
+  $("vidBtn").disabled = busy || n === 0;
+}
+["staticPrompt", "sampleFps", "maxSec", "strength", "actStrength", "anchor", "hold", "boomerang", "negative", "keepPos", "keepNeg"].forEach((id) => $(id).addEventListener("input", () => refresh(true)));
+$("modelType").addEventListener("change", () => { fillResolutions(); saveSettings(); });
+$("subject").addEventListener("change", () => { applyKeepDefaults(); refresh(true); });
+document.querySelectorAll("[data-persist]").forEach((el) => el.addEventListener("change", saveSettings));
+
+// ---------- film strip ----------
+function makeFrameEl(f, i) {
+  const hold = Math.max(0.04, num("hold", 0.5));
+  const b = document.createElement("button"); b.type = "button"; b.className = "frame" + (f.action < 0 ? " notag" : "");
+  if (f.action >= 0) b.style.setProperty("--h", hue(f.action));
+  b.dataset.i = String(i); b.setAttribute("aria-pressed", String(i === selected));
+  b.setAttribute("aria-label", `Frame ${i + 1}${f.action >= 0 ? `, action ${f.action + 1}` : ""}`);
+  const tag = document.createElement("div"); tag.className = "tag";
+  const img = document.createElement("img"); img.src = f.url; img.alt = "";
+  const cap = document.createElement("span");
+  cap.textContent = `${f.action >= 0 ? `A${f.action + 1} · ` : ""}F${pad3(i + 1)}\n${fmtTime(i * hold)}`;
+  cap.style.whiteSpace = "pre";
+  b.append(tag, img, cap);
+  b.addEventListener("click", () => { const k = +b.dataset.i; selectFrame(k === selected ? -1 : k); });
+  return b;
+}
+function renderStrip() {
+  const strip = $("strip"); strip.textContent = "";
+  if (!frames.length) {
+    const e = document.createElement("div"); e.className = "empty"; e.textContent = "Your frames will appear here.";
+    strip.appendChild(e);
+  }
+  frames.forEach((f, i) => strip.appendChild(makeFrameEl(f, i)));
+  refresh(true);
+}
+function addFrame(f) {
+  frames.push(f);
+  const strip = $("strip");
+  const empty = strip.querySelector(".empty"); if (empty) empty.remove();
+  const el = makeFrameEl(f, frames.length - 1);
+  strip.appendChild(el);
+  el.scrollIntoView({ block: "nearest", inline: "end", behavior: "smooth" });
+}
+function selectFrame(i) {
+  selected = i;
+  document.querySelectorAll("#strip .frame").forEach((b) => b.setAttribute("aria-pressed", String(+b.dataset.i === i)));
+  const bar = $("selbar");
+  if (i < 0 || !frames[i]) { bar.hidden = true; return; }
+  const f = frames[i];
+  $("selImg").src = f.url;
+  $("selMeta").textContent = `Frame ${i + 1}${f.action >= 0 ? ` · action ${f.action + 1}` : ""} · seed ${f.seed} · ${f.prompt}`;
+  bar.hidden = false;
+}
+$("saveFrameBtn").addEventListener("click", () => {
+  const f = frames[selected]; if (!f) return;
+  download(f.blob, `dream-reel-frame-${pad3(selected + 1)}-${stamp()}.jpg`);
+});
+$("removeFrameBtn").addEventListener("click", () => {
+  if (busy || selected < 0) return;
+  URL.revokeObjectURL(frames[selected].url);
+  frames.splice(selected, 1); selected = -1; $("selbar").hidden = true; renderStrip();
+});
+$("hold").addEventListener("change", renderStrip);
+
+// ---------- video frame extraction ----------
+async function openVideo(file) {
+  const v = document.createElement("video");
+  v.muted = true; v.playsInline = true; v.preload = "auto";
+  const url = URL.createObjectURL(file); v.src = url;
+  await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error("Chrome can't read this video")); });
+  return { v, url };
+}
+function seek(v, t) {
+  return new Promise((res, rej) => {
+    const to = setTimeout(() => rej(new Error("Video seek timed out")), 10000);
+    v.onseeked = () => { clearTimeout(to); res(); };
+    v.currentTime = t;
+  });
+}
+
+// ---------- run generation ----------
+function setBusy(b) {
+  busy = b;
+  $("genBtn").disabled = b; $("stopBtn").hidden = !b;
+  document.querySelectorAll(".seg-ctl button").forEach((x) => (x.disabled = b));
+  $("pickBtn").disabled = b; $("removeFrameBtn").disabled = b;
+  document.querySelectorAll(".act .icon").forEach((x) => { if (b) x.disabled = true; });
+  $("addAct").disabled = b || actions.length >= 20;
+  if (!b) renderActs();
+  updateVidEstimate();
+}
+function genStatus(msg, err) { const s = $("genStatus"); s.textContent = msg; s.classList.toggle("err", !!err); }
+
+$("stopBtn").addEventListener("click", () => { if (genAbort) genAbort.abort(); });
+$("genBtn").addEventListener("click", runGeneration);
+
+async function runGeneration() {
+  if (busy) return;
+  const [W, H] = getRes();
+  const common = {
+    negative: composeNegative(), steps: clamp(Math.round(num("steps", 30)), 1, 50),
+    cfg: clamp(num("cfg", 7), 1, 20), scheduler: $("scheduler").value, W, H,
+  };
+  const strength = clamp(num("strength", 0.35), 0.05, 1);
+  const actStrength = clamp(num("actStrength", 0.6), 0.05, 1);
+  const anchor = clamp(num("anchor", 0.25), 0, 0.6);
+  if (mode === "video") {
+    if (!source || source.kind !== "video") return genStatus("Choose a video first.", true);
+  } else {
+    if (mode === "photo" && (!source || source.kind !== "photo")) return genStatus("Choose a photo first.", true);
+    if (!$("staticPrompt").value.trim() && !actions.some((a) => a.text.trim())) return genStatus("Write a character or at least one action.", true);
+  }
+  const plan = buildPlan(); const total = plan.length;
+  if (!total) return genStatus("Nothing to generate.", true);
+  if (!(await checkConn())) return genStatus("Local Dream isn't reachable. See the steps at the top.", true);
+
+  frames.forEach((f) => URL.revokeObjectURL(f.url));
+  frames = []; selected = -1; $("selbar").hidden = true; renderStrip();
+  const seedIn = $("seed").value.trim();
+  const baseSeed = seedIn !== "" && Number.isFinite(+seedIn) ? clamp(Math.floor(+seedIn), 0, 2147483647) : Math.floor(Math.random() * 2147483647);
+  const lock = $("lockSeed").checked;
+
+  genAbort = new AbortController();
+  setBusy(true); keepAwake(true);
+  if (mode !== "video") markTimeline(0);
+  const t0 = performance.now();
+  let video = null;
+  try {
+    let refBlob = null, prevBlob = null;
+    if (mode === "photo") refBlob = prevBlob = await coverJpegBlob(source.img, source.w, source.h, W, H);
+    if (mode === "video") video = await openVideo(source.file);
+    const vFps = clamp(Math.round(num("sampleFps", 6)), 1, 15);
+
+    for (let i = 0; i < total; i++) {
+      if (genAbort.signal.aborted) throw new DOMException("Stopped", "AbortError");
+      const step = plan[i];
+      let image = null, denoise = strength;
+      if (mode === "video") {
+        const t = Math.min(i / vFps, Math.max(0, video.v.duration - 0.05));
+        await seek(video.v, t);
+        const vb = await coverJpegBlob(video.v, video.v.videoWidth, video.v.videoHeight, W, H);
+        image = await blobToB64(vb);
+      } else if (prevBlob) {
+        image = await mixImages(prevBlob, refBlob, anchor, W, H);
+        denoise = step.start ? actStrength : strength;
+      }
+      if (mode !== "video") markTimeline(i);
+      const seed = lock ? baseSeed : (baseSeed + i) % 2147483647;
+      const label = `Frame ${i + 1} of ${total}${step.action >= 0 ? ` · action ${step.action + 1}` : ""}`;
+      genStatus(`${label}…`);
+      const r = await generate({ ...common, prompt: step.prompt, seed, image, denoise }, (s, n) => {
+        $("genBar").style.width = `${((i + (n ? s / n : 0)) / total) * 100}%`;
+        genStatus(`${label} · step ${s}/${n}`);
+      }, genAbort.signal);
+      const blob = b64ToBlob(r.b64, r.type);
+      addFrame({ blob, url: URL.createObjectURL(blob), prompt: step.prompt, seed: r.seed ?? seed, action: step.action });
+      if (mode !== "video") { prevBlob = blob; if (mode === "text" && !refBlob) refBlob = blob; }
+      $("genBar").style.width = `${((i + 1) / total) * 100}%`;
+      if (mode !== "video") markTimeline(i + 1);
+    }
+    const secs = (performance.now() - t0) / 1000;
+    genStatus(`Done: ${frames.length} frames in ${secs.toFixed(0)} s (seed ${baseSeed}). Tap a frame to save or remove it.`);
+    if (mode === "video") $("hold").value = (1 / vFps).toFixed(2);
+  } catch (e) {
+    if (e && e.name === "AbortError") genStatus(`Stopped. Kept ${frames.length} frame${frames.length === 1 ? "" : "s"}.`);
+    else genStatus(`${e && e.message ? e.message : e}`, true);
+  } finally {
+    if (video) { URL.revokeObjectURL(video.url); video.v.removeAttribute("src"); video.v.load(); }
+    genAbort = null; setBusy(false); keepAwake(false); renderStrip();
+    if (mode !== "video") markTimeline(-1);
+  }
+}
+
+// ---------- video rendering ----------
+function buildTimeline(n, boomerang) {
+  const order = [...Array(n).keys()];
+  if (boomerang && n > 1) for (let i = n - 2; i >= 1; i--) order.push(i);
+  return order;
+}
+function makeDrawer(bitmaps, order, opts) {
+  const { W, H, fps, hold, fade, motion } = opts;
+  const frameCount = Math.max(1, Math.round(order.length * hold * fps));
+  const total = frameCount / fps;
+  const xf = fade ? 0.5 : 0; // portion of each hold spent blending into the next image
+  return {
+    frameCount,
+    draw(ctx, k) {
+      const t = k / fps;
+      const pos = Math.min(order.length - 1e-9, t / hold);
+      const idx = Math.floor(pos), local = pos - idx;
+      const A = bitmaps[order[idx]];
+      const nextIdx = idx + 1 < order.length ? idx + 1 : (opts.loopBlend ? 0 : -1);
+      const p = total > 0 ? t / total : 0;
+      let s = 1, dx = 0;
+      if (motion === "in") s = 1 + 0.15 * p;
+      else if (motion === "out") s = 1.15 - 0.15 * p;
+      else if (motion === "pan") { s = 1.15; dx = (p - 0.5) * W * 0.13; }
+      ctx.save();
+      ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+      ctx.translate(W / 2 + dx, H / 2); ctx.scale(s, s); ctx.translate(-W / 2, -H / 2);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(A, 0, 0, W, H);
+      if (xf > 0 && nextIdx >= 0 && local > 1 - xf) {
+        const a = (local - (1 - xf)) / xf;
+        ctx.globalAlpha = a * a * (3 - 2 * a); // smoothstep
+        ctx.drawImage(bitmaps[order[nextIdx]], 0, 0, W, H);
+      }
+      ctx.restore();
+    },
+  };
+}
+
+// Minimal MP4 (ISO BMFF) writer for one H.264 track.
+function writeMp4(samples, avcC, w, h, fps) {
+  const enc = new TextEncoder();
+  const u32 = (n) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const u16 = (n) => [(n >>> 8) & 255, n & 255];
+  const cat = (parts) => {
+    let len = 0; for (const p of parts) len += p.length;
+    const out = new Uint8Array(len); let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  };
+  const box = (type, ...parts) => {
+    const body = cat(parts.map((p) => (p instanceof Uint8Array ? p : new Uint8Array(p))));
+    return cat([new Uint8Array(u32(body.length + 8)), enc.encode(type), body]);
+  };
+  const full = (type, version, flags, ...parts) => box(type, [version, (flags >> 16) & 255, (flags >> 8) & 255, flags & 255], ...parts);
+  const matrix = [...u32(0x10000), ...u32(0), ...u32(0), ...u32(0), ...u32(0x10000), ...u32(0), ...u32(0), ...u32(0), ...u32(0x40000000)];
+  const timescale = fps * 100, delta = 100, n = samples.length;
+  const mediaDur = n * delta, movieDur = Math.round((n / fps) * 1000);
+
+  const build = (chunkOffset) => {
+    const mvhd = full("mvhd", 0, 0, [...u32(0), ...u32(0), ...u32(1000), ...u32(movieDur), ...u32(0x10000), ...u16(0x100), 0, 0, ...u32(0), ...u32(0), ...matrix, ...new Array(24).fill(0), ...u32(2)]);
+    const tkhd = full("tkhd", 0, 3, [...u32(0), ...u32(0), ...u32(1), ...u32(0), ...u32(movieDur), ...u32(0), ...u32(0), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...matrix, ...u32(w << 16), ...u32(h << 16)]);
+    const mdhd = full("mdhd", 0, 0, [...u32(0), ...u32(0), ...u32(timescale), ...u32(mediaDur), ...u16(0x55c4), ...u16(0)]);
+    const hdlr = full("hdlr", 0, 0, [...u32(0)], enc.encode("vide"), new Uint8Array(12), enc.encode("VideoHandler\0"));
+    const vmhd = full("vmhd", 0, 1, [...u16(0), ...u16(0), ...u16(0), ...u16(0)]);
+    const dinf = box("dinf", full("dref", 0, 0, [...u32(1)], full("url ", 0, 1)));
+    const compressor = new Uint8Array(32);
+    const avc1 = box("avc1",
+      [0, 0, 0, 0, 0, 0, ...u16(1), ...u16(0), ...u16(0), ...u32(0), ...u32(0), ...u32(0), ...u16(w), ...u16(h),
+       ...u32(0x480000), ...u32(0x480000), ...u32(0), ...u16(1)], compressor, [...u16(0x18), ...u16(0xffff)],
+      box("avcC", avcC));
+    const stsd = full("stsd", 0, 0, [...u32(1)], avc1);
+    const stts = full("stts", 0, 0, [...u32(1), ...u32(n), ...u32(delta)]);
+    const keys = []; samples.forEach((s, i) => { if (s.key) keys.push(i + 1); });
+    const stss = full("stss", 0, 0, [...u32(keys.length), ...keys.flatMap(u32)]);
+    const stsc = full("stsc", 0, 0, [...u32(1), ...u32(1), ...u32(n), ...u32(1)]);
+    const sizes = new Uint8Array(n * 4); samples.forEach((s, i) => sizes.set(u32(s.data.length), i * 4));
+    const stsz = full("stsz", 0, 0, [...u32(0), ...u32(n)], sizes);
+    const stco = full("stco", 0, 0, [...u32(1), ...u32(chunkOffset)]);
+    const stbl = box("stbl", stsd, stts, stss, stsc, stsz, stco);
+    const minf = box("minf", vmhd, dinf, stbl);
+    const mdia = box("mdia", mdhd, hdlr, minf);
+    const trak = box("trak", tkhd, mdia);
+    return box("moov", mvhd, trak);
+  };
+  const ftyp = box("ftyp", enc.encode("isom"), u32(512), enc.encode("isomiso2avc1mp41"));
+  const moovLen = build(0).length;
+  const moov = build(ftyp.length + moovLen + 8);
+  let mdatLen = 8; for (const s of samples) mdatLen += s.data.length;
+  const out = new Uint8Array(ftyp.length + moov.length + mdatLen);
+  let o = 0;
+  out.set(ftyp, o); o += ftyp.length;
+  out.set(moov, o); o += moov.length;
+  out.set(u32(mdatLen), o); out.set(enc.encode("mdat"), o + 4); o += 8;
+  for (const s of samples) { out.set(s.data, o); o += s.data.length; }
+  return new Blob([out], { type: "video/mp4" });
+}
+
+async function encodeMp4WebCodecs(drawer, W, H, fps, onProgress) {
+  const size = Math.max(W, H);
+  if (typeof VideoEncoder !== "function" || typeof VideoFrame !== "function") throw new Error("no-webcodecs");
+  const bitrate = size <= 512 ? 4e6 : size <= 720 ? 6e6 : 10e6;
+  let config = null;
+  for (const codec of ["avc1.640028", "avc1.4d0028", "avc1.42e028", "avc1.420028"]) {
+    const c = { codec, width: W, height: H, bitrate, framerate: fps, avc: { format: "avc" } };
+    try { const s = await VideoEncoder.isConfigSupported(c); if (s.supported) { config = c; break; } } catch (_) {}
+  }
+  if (!config) throw new Error("no-h264");
+  const samples = []; let avcC = null; let encErr = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => {
+      if (meta && meta.decoderConfig && meta.decoderConfig.description && !avcC) {
+        const d = meta.decoderConfig.description;
+        avcC = d instanceof ArrayBuffer ? new Uint8Array(d.slice(0)) : new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength));
+      }
+      const data = new Uint8Array(chunk.byteLength); chunk.copyTo(data);
+      samples.push({ data, key: chunk.type === "key", ts: chunk.timestamp });
+    },
+    error: (e) => { encErr = e; },
+  });
+  encoder.configure(config);
+  const canvas = document.createElement("canvas"); canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d", { alpha: false }); ctx.imageSmoothingQuality = "high";
+  const us = 1e6 / fps;
+  for (let k = 0; k < drawer.frameCount; k++) {
+    if (encErr) throw encErr;
+    drawer.draw(ctx, k);
+    const vf = new VideoFrame(canvas, { timestamp: Math.round(k * us), duration: Math.round(us) });
+    encoder.encode(vf, { keyFrame: k % (fps * 2) === 0 });
+    vf.close();
+    while (encoder.encodeQueueSize > 6) await sleep(4);
+    if (k % 10 === 0) { onProgress(k / drawer.frameCount); await sleep(0); }
+  }
+  await encoder.flush(); encoder.close();
+  if (encErr) throw encErr;
+  if (!avcC || samples.length !== drawer.frameCount) throw new Error("encoder-output");
+  for (let i = 1; i < samples.length; i++) if (samples[i].ts <= samples[i - 1].ts) throw new Error("reordered-frames");
+  if (!samples[0].key) throw new Error("no-keyframe");
+  onProgress(1);
+  return writeMp4(samples, avcC, W, H, fps);
+}
+
+async function encodeMediaRecorder(drawer, W, H, fps, onProgress) {
+  if (typeof MediaRecorder !== "function") throw new Error("This browser can't record video.");
+  const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+  const mime = types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  const canvas = document.createElement("canvas"); canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  const stream = canvas.captureStream(0); const track = stream.getVideoTracks()[0];
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 6e6 } : {});
+  const chunks = []; rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  const stopped = new Promise((r) => (rec.onstop = r));
+  drawer.draw(ctx, 0); rec.start(500);
+  const start = performance.now(), frameMs = 1000 / fps;
+  for (let k = 0; k < drawer.frameCount; k++) {
+    drawer.draw(ctx, k);
+    if (track.requestFrame) track.requestFrame();
+    const due = start + (k + 1) * frameMs - performance.now();
+    if (due > 0) await sleep(due);
+    if (k % 5 === 0) onProgress(k / drawer.frameCount);
+  }
+  rec.stop(); await stopped; track.stop(); onProgress(1);
+  const type = (rec.mimeType || mime || "video/webm").split(";")[0];
+  return new Blob(chunks, { type });
+}
+
+function vidStatus(msg, err) { const s = $("vidStatus"); s.textContent = msg; s.classList.toggle("err", !!err); }
+$("vidBtn").addEventListener("click", makeVideo);
+async function makeVideo() {
+  if (busy || !frames.length) return;
+  setBusy(true); keepAwake(true); $("vidBtn").disabled = true;
+  $("saveRow").hidden = true; $("outVideo").hidden = true;
+  const longSide = parseInt($("outSize").value, 10) || 720;
+  const fps = parseInt($("fps").value, 10) || 30;
+  const hold = clamp(num("hold", 0.5), 0.04, 10);
+  const bitmaps = [];
+  try {
+    vidStatus("Preparing frames…"); $("vidBar").style.width = "0%";
+    for (const f of frames) bitmaps.push(await createImageBitmap(f.blob));
+    const aw = bitmaps[0].width, ah = bitmaps[0].height;
+    const ev = (v) => Math.max(2, Math.round(v / 2) * 2);
+    const W = aw >= ah ? longSide : ev(longSide * aw / ah), H = aw >= ah ? ev(longSide * ah / aw) : longSide;
+    const order = buildTimeline(bitmaps.length, $("boomerang").checked);
+    const drawer = makeDrawer(bitmaps, order, { W, H, fps, hold, fade: $("fade").checked, motion: $("motion").value, loopBlend: $("boomerang").checked });
+    const prog = (p) => { $("vidBar").style.width = `${Math.round(p * 100)}%`; };
+    let blob;
+    try {
+      vidStatus("Encoding MP4…");
+      blob = await encodeMp4WebCodecs(drawer, W, H, fps, prog);
+    } catch (e) {
+      vidStatus(`Recording video in real time (${fmtTime(drawer.frameCount / fps)})… keep the screen on.`);
+      blob = await encodeMediaRecorder(drawer, W, H, fps, prog);
+    }
+    if (lastVideo) URL.revokeObjectURL(lastVideo.url);
+    const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+    lastVideo = { blob, url: URL.createObjectURL(blob), name: `dream-reel-${stamp()}.${ext}` };
+    const v = $("outVideo"); v.src = lastVideo.url; v.hidden = false;
+    $("saveRow").hidden = false;
+    vidStatus(`Ready: ${fmtTime(drawer.frameCount / fps)}, ${W}×${H}, ${ext.toUpperCase()}, ${(blob.size / 1048576).toFixed(1)} MB.`);
+  } catch (e) {
+    vidStatus(`Couldn't make the video: ${e && e.message ? e.message : e}`, true);
+  } finally {
+    bitmaps.forEach((b) => b.close && b.close());
+    setBusy(false); keepAwake(false);
+  }
+}
+$("saveVidBtn").addEventListener("click", () => { if (lastVideo) download(lastVideo.blob, lastVideo.name); });
+
+// ---------- start ----------
+let savedRes;
+try { savedRes = JSON.parse(localStorage.getItem(STORE) || "{}").resolution; } catch (_) {}
+fillResolutions();
+loadSettings();
+fillResolutions(savedRes);
+applyKeepDefaults();
+renderActs();
+setMode("text");
+renderStrip();
+checkConn();
+})();
+</script>
+</body>
+</html>
