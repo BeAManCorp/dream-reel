@@ -264,7 +264,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
       <label class="field" for="modelType">Model type
         <select id="modelType"><option value="npu">NPU model</option><option value="cpu">CPU model</option></select>
       </label>
-      <label class="field" for="resolution">Resolution
+      <label class="field" for="resolution">Resolution (same as Local Dream)
         <select id="resolution"></select>
       </label>
     </div>
@@ -368,8 +368,8 @@ const KEEP = {
 };
 const MOVES = [["none", "Camera still"], ["in", "Zoom in"], ["out", "Zoom out"], ["left", "Pan left"], ["right", "Pan right"]];
 const RES = {
-  npu: { list: ["512x512", "512x768", "768x512", "768x768", "768x1024", "1024x768", "1024x1024"], def: "1024x1024",
-         hint: "Only sizes your downloaded NPU model lists in Local Dream will work. Larger sizes are slower." },
+  npu: { list: ["512x512", "512x768", "768x512", "768x768", "768x1024", "1024x768", "1024x1024"], def: "512x512",
+         hint: "Must be the same size Local Dream loaded the model at, or frames come out as coloured noise. To use a bigger size, change it in Local Dream's settings first and reload the model there." },
   cpu: { list: ["256x256", "384x384", "512x512"], def: "512x512", hint: "CPU models support square sizes up to 512 × 512." },
 };
 
@@ -380,6 +380,7 @@ let project = {
   mask: null, maskAspect: 1, maskPct: 100,   // mask: PNG, white = can change, black = keep
   scenes: [newScene("", 4)],
 };
+let noiseOk = null; // resolution the person confirmed after a noise warning
 let busy = false, abortCtl = null, working = null; // working = { sceneId, index }
 let lastVideo = null, previewing = null;
 
@@ -462,6 +463,40 @@ function blobToB64(blob) {
   return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(",")[1]); fr.onerror = () => rej(new Error("Could not read image")); fr.readAsDataURL(blob); });
 }
 function b64ToBlob(b64, type) { const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return new Blob([out], { type }); }
+// True when an image is pure coloured noise. That's what Local Dream returns when the size asked for
+// differs from the size the NPU model was loaded at. Real pictures change about as much (or more)
+// between neighbouring pixels at a coarse scale as at a fine one; noise smooths away when shrunk.
+async function looksLikeNoise(blob) {
+  try {
+    const bm = await createImageBitmap(blob);
+    let src = bm, w = bm.width, h = bm.height;
+    const diffAt = {};
+    while (w > 16 || h > 16) { // halve step by step so each step averages pixels like a box filter
+      w = Math.max(16, w >> 1); h = Math.max(16, h >> 1);
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const x = c.getContext("2d", { willReadFrequently: true });
+      x.imageSmoothingEnabled = true; x.imageSmoothingQuality = "high";
+      x.drawImage(src, 0, 0, w, h); src = c;
+      if (w <= 64 && h <= 64 && !diffAt.fine) diffAt.fine = edgeDiff(x, w, h);
+    }
+    const coarse = edgeDiff(src.getContext("2d", { willReadFrequently: true }), w, h), fine = diffAt.fine;
+    bm.close();
+    return fine > 14 && coarse / fine < 0.75;
+  } catch (_) { return false; }
+}
+function edgeDiff(ctx, w, h) {
+  const d = ctx.getImageData(0, 0, w, h).data; let sum = 0, n = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    if (x + 1 < w) { for (let c = 0; c < 3; c++) sum += Math.abs(d[i + c] - d[i + 4 + c]); n += 3; }
+    if (y + 1 < h) { for (let c = 0; c < 3; c++) sum += Math.abs(d[i + c] - d[i + w * 4 + c]); n += 3; }
+  }
+  return n ? sum / n : 0;
+}
+function noiseMessage(W, H) {
+  return `That frame came out as noise, so it wasn't kept. The size here (${W} × ${H}) must match the size Local Dream loaded the model at. ` +
+    `Pick that size in Settings (512 × 512 if unsure). If they already match, tap Generate to continue anyway.`;
+}
 function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("Could not encode image"))), type, q)); }
 function drawCover(ctx, src, sw, sh, w, h) { const s = Math.max(w / sw, h / sh); ctx.drawImage(src, (w - sw * s) / 2, (h - sh * s) / 2, sw * s, sh * s); }
 // Builds the starting image for a frame: previous image, moved by the camera, with some reference blended back in.
@@ -938,6 +973,7 @@ async function runJobs(jobs) {
   let done = 0; const t0 = performance.now();
   abortCtl = new AbortController(); setBusy(true); keepAwake(true);
   const seed0 = baseSeed(), lock = $("lockSeed").checked;
+  let noiseChecked = false;
   try {
     for (const job of jobs) {
       const s = job.scene, si = project.scenes.indexOf(s);
@@ -952,6 +988,10 @@ async function runJobs(jobs) {
         const label = `Scene ${si + 1} · frame ${k + 1} of ${s.frames}`;
         setStatus(`${label}…`);
         const r = await makeFrame(s, k, prev, seed, abortCtl.signal, label, done / total, (done + 1) / total);
+        if (!noiseChecked) {
+          noiseChecked = true; const size = $("resolution").value;
+          if (noiseOk !== size && await looksLikeNoise(r.blob)) { noiseOk = size; const [W, H] = getRes(); throw new Error(noiseMessage(W, H)); }
+        }
         s.imgs.push({ blob: r.blob, seed: r.seed ?? seed });
         done++; $("genBar").style.width = `${(done / total) * 100}%`;
         updateCardState(s); updateTotals(); saveProject();

@@ -33,7 +33,7 @@ While Local Dream is open, its engine also accepts requests from other web pages
 
 - **Prompt length:** Stable Diffusion 1.5 reads about 75 tokens per prompt and ignores the rest. Each scene card shows the count from Local Dream.
 - **Not a video model:** smooth motion comes from small changes between frames, camera moves, and blending. Two characters in fast action are hard for these models.
-- **Resolution:** only the sizes your downloaded NPU model lists in Local Dream will work. CPU models support squares up to 512 × 512.
+- **Resolution:** on NPU, pick the same size Local Dream loaded the model at (its Advanced Settings, then reload the model). A different size gives coloured noise; the page detects that, drops the frame and stops. If unsure, use 512 × 512. CPU models support squares up to 512 × 512.
 
 ## Website
 
