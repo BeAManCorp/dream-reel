@@ -24,8 +24,11 @@ Each page is one self-contained HTML file with no outside libraries.
 Generate only makes what's missing: new scenes, edited scenes, and extra frames. To try again with different pictures:
 
 - **Redo all frames** (under the scenes) remakes everything with new seeds. **Clear all frames** deletes them but keeps your text.
-- **Redo scene** on a scene card remakes that scene with new seeds.
+- **Redo scene** and **Clear** on a scene card do the same for one scene.
 - Tap a frame for **Redo from here to the end** (this frame and everything after it) or **Redo only this frame**.
+- Every redo asks whether to **use the current frames as samples**. On: each new frame starts from the frame before it plus its old version, so it keeps the look and changes details. Off: it starts only from the frame before it. The choice is remembered.
+
+Each new frame always starts from the one before it; only the very first frame (with no start image) starts from text alone. While frames are being made, the small picture in the bottom bar loops through every frame so far and jumps to each new one. Tap it for a large view.
 
 Each scene makes 1 frame by default. Change it per scene with − / +, or for new scenes in **Settings → Frames per new scene** (**Use for all scenes** applies it everywhere). Open **Prompt sent to Local Dream** on a scene to see the exact prompt, with any part the model ignores struck through. Work autosaves in the phone's browser storage.
 

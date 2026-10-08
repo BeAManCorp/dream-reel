@@ -108,6 +108,11 @@ ol.scenes { list-style: none; margin: 0; padding: 0; display: flex; flex-directi
 .stepper output { min-width: 64px; text-align: center; font: 600 .82rem var(--f-mono); }
 .scene-ctl select { width: auto; flex: 1 1 120px; padding: 8px 10px; font-size: .88rem; }
 .frames-row { align-items: end; }
+.bar-top { display: flex; gap: 10px; align-items: center; }
+.bar-stat { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.live { width: 60px; height: 60px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #000; cursor: pointer; }
+.live img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.scene-acts { display: flex; gap: 6px; }
 .redo-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .scene-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
 .tok { font: 500 .75rem var(--f-mono); color: var(--muted); }
@@ -256,8 +261,13 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
 <!-- Bottom bar -->
 <div class="bar">
   <div class="bar-in">
-    <p class="status" id="status" aria-live="polite"></p>
-    <div class="progress" aria-hidden="true"><div id="genBar"></div></div>
+    <div class="bar-top">
+      <button class="live" type="button" id="liveBtn" aria-label="Open live preview" hidden><img id="liveImg" alt=""></button>
+      <div class="bar-stat">
+        <p class="status" id="status" aria-live="polite"></p>
+        <div class="progress" aria-hidden="true"><div id="genBar"></div></div>
+      </div>
+    </div>
     <div class="bar-btns">
       <button class="btn primary" type="button" id="genBtn">Generate</button>
       <button class="btn danger" type="button" id="stopBtn" hidden>Stop</button>
@@ -345,12 +355,36 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
   </div>
 </dialog>
 
+<!-- Live preview -->
+<dialog id="liveDlg" aria-labelledby="h-live">
+  <div class="dlg">
+    <div class="dlg-head"><h2 id="h-live">Live preview</h2><button class="btn small" type="button" data-close>Close</button></div>
+    <img id="liveBig" alt="Latest frames, playing in a loop">
+    <p class="sub" id="liveLabel"></p>
+  </div>
+</dialog>
+
+<!-- Redo confirmation -->
+<dialog id="redoDlg" aria-labelledby="h-redo">
+  <div class="dlg">
+    <div class="dlg-head"><h2 id="h-redo">Redo</h2></div>
+    <p class="sub" id="redoText"></p>
+    <label class="check" for="useOld"><input type="checkbox" id="useOld" checked> Use the current frames as samples</label>
+    <p class="sub">On: each new frame starts from the frame before it plus its old version, so it keeps the look and changes the details. Off: each new frame starts only from the frame before it.</p>
+    <div class="btns">
+      <button class="btn" type="button" id="redoCancel">Cancel</button>
+      <button class="btn primary" type="button" id="redoGo">Redo</button>
+    </div>
+  </div>
+</dialog>
+
 <!-- Frame actions -->
 <dialog id="frameDlg" aria-labelledby="h-frame">
   <div class="dlg">
     <div class="dlg-head"><h2 id="h-frame">Frame</h2><button class="btn small" type="button" data-close>Close</button></div>
     <img id="fdImg" alt="Selected frame">
     <p class="sub" id="fdMeta"></p>
+    <label class="check" for="fdUseOld"><input type="checkbox" id="fdUseOld"> Use the current frames as samples</label>
     <div class="btns">
       <button class="btn primary" type="button" id="fdRedoOn">Redo from here to the end</button>
       <button class="btn" type="button" id="fdRedo">Redo only this frame</button>
@@ -408,7 +442,7 @@ function dropUrl(blob) { const u = urls.get(blob); if (u) { URL.revokeObjectURL(
 
 // ---------- storage: settings in localStorage, project (with images) in IndexedDB ----------
 const SET_KEY = "dreamreel.lite.settings";
-const SET_IDS = ["modelType", "resolution", "sceneFrames", "steps", "cfg", "scheduler", "negative", "lockSeed", "speed", "outSize", "boomerang"];
+const SET_IDS = ["modelType", "resolution", "sceneFrames", "useOld", "steps", "cfg", "scheduler", "negative", "lockSeed", "speed", "outSize", "boomerang"];
 function saveSettings() {
   const o = {}; SET_IDS.forEach((id) => { const el = $(id); o[id] = el.type === "checkbox" ? el.checked : el.value; });
   try { localStorage.setItem(SET_KEY, JSON.stringify(o)); } catch (_) {}
@@ -517,7 +551,7 @@ function noiseMessage(W, H) {
 function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("Could not encode image"))), type, q)); }
 function drawCover(ctx, src, sw, sh, w, h) { const s = Math.max(w / sw, h / sh); ctx.drawImage(src, (w - sw * s) / 2, (h - sh * s) / 2, sw * s, sh * s); }
 // Builds the starting image for a frame: previous image, moved by the camera, with some reference blended back in.
-async function makeStart(prevBlob, refBlob, anchor, move, W, H) {
+async function makeStart(prevBlob, refBlob, anchor, move, W, H, sample = null) {
   const pb = await createImageBitmap(prevBlob);
   const c = document.createElement("canvas"); c.width = W; c.height = H;
   const ctx = c.getContext("2d"); ctx.imageSmoothingQuality = "high";
@@ -530,6 +564,11 @@ async function makeStart(prevBlob, refBlob, anchor, move, W, H) {
     ctx.restore();
   }
   pb.close();
+  // Old version of this frame (redo with samples): blend it over the previous frame.
+  if (sample && sample !== prevBlob) {
+    const sb = await createImageBitmap(sample);
+    ctx.globalAlpha = 0.5; drawCover(ctx, sb, sb.width, sb.height, W, H); ctx.globalAlpha = 1; sb.close();
+  }
   // The reference blend would pull a moving camera back, so it only applies to still shots.
   if (refBlob && refBlob !== prevBlob && anchor > 0.01 && move === "none") {
     const rb = await createImageBitmap(refBlob);
@@ -848,8 +887,15 @@ function sceneCard(s, i) {
   const foot = document.createElement("div"); foot.className = "scene-foot";
   const tok = document.createElement("span"); tok.className = "tok"; tok.textContent = "";
   const redo = document.createElement("button"); redo.type = "button"; redo.className = "btn small"; redo.textContent = s.imgs.length ? "Redo scene" : "Make scene";
-  redo.disabled = busy; redo.addEventListener("click", () => runJobs([{ scene: s, from: 0 }], { fresh: s.imgs.length > 0 }));
-  foot.append(tok, redo);
+  redo.disabled = busy; redo.addEventListener("click", () => {
+    if (!s.imgs.length) runJobs([{ scene: s, from: 0 }]);
+    else askRedo(`Make scene ${i + 1} again with new seeds? Its ${s.imgs.length} frame${s.imgs.length === 1 ? "" : "s"} will be replaced.`, [{ scene: s, from: 0 }]);
+  });
+  const clr = document.createElement("button"); clr.type = "button"; clr.className = "btn small danger"; clr.textContent = "Clear";
+  clr.hidden = !s.imgs.length; clr.disabled = busy;
+  clr.addEventListener("click", () => { if (busy) return; s.imgs.forEach((m) => dropUrl(m.blob)); s.imgs = []; s.edited = false; refreshCard(s); updateTotals(); liveShow(live.i); saveProject(true); setStatus(`Scene ${i + 1} cleared. Its text is kept.`); });
+  const acts = document.createElement("div"); acts.className = "scene-acts"; acts.append(clr, redo);
+  foot.append(tok, acts);
   const cutEl = document.createElement("p"); cutEl.className = "cut"; cutEl.hidden = true;
   const sent = document.createElement("details"); sent.className = "sent";
   const sum = document.createElement("summary"); sum.textContent = "Prompt sent to Local Dream";
@@ -981,10 +1027,13 @@ function settingsNow() {
   return { W, H, steps: clamp(Math.round(num("steps", 30)), 1, 50), cfg: clamp(num("cfg", 7), 1, 20), scheduler: $("scheduler").value, negative: negativeFor() };
 }
 // One frame: start from `prev` (or nothing), apply camera + reference, generate.
-async function makeFrame(scene, k, prev, seed, signal, label, frac0, frac1) {
+// `prev` is the frame before (always used when there is one); `sample` is the old version of this frame on a redo.
+async function makeFrame(scene, k, prev, seed, signal, label, frac0, frac1, sample = null) {
   const st = settingsNow(), mo = MOTION[project.motion];
   let image = null, denoise = k === 0 ? mo.start : mo.frame, mask = null;
-  if (prev) image = await makeStart(prev, refBlob(), mo.anchor, scene.move, st.W, st.H);
+  if (prev) image = await makeStart(prev, refBlob(), mo.anchor, scene.move, st.W, st.H, sample);
+  else if (sample) image = await makeStart(sample, null, 0, "none", st.W, st.H);
+  if (sample) denoise = mo.start; // room to change details while keeping the old frame's layout
   if (image && project.mask && project.photo && scene.move === "none") mask = await maskB64(st.W, st.H);
   return generate({ ...st, prompt: promptFor(scene), seed, image, denoise, mask }, (s, n) => {
     $("genBar").style.width = `${(frac0 + (frac1 - frac0) * (n ? s / n : 0)) * 100}%`;
@@ -1008,7 +1057,8 @@ async function runJobs(jobs, opts = {}) {
     for (const job of jobs) {
       const s = job.scene, si = project.scenes.indexOf(s);
       if (si < 0) continue;
-      s.imgs.splice(job.from).forEach((m) => dropUrl(m.blob));
+      const old = s.imgs.splice(job.from).map((m) => m.blob); // kept as samples until this scene is done
+      old.forEach(dropUrl); if (!opts.samples) old.length = 0;
       s.edited = false;
       for (let k = job.from; k < s.frames; k++) {
         if (abortCtl.signal.aborted) throw new DOMException("Stopped", "AbortError");
@@ -1017,12 +1067,12 @@ async function runJobs(jobs, opts = {}) {
         const seed = lock ? seed0 : (seed0 + si * 1000 + k) % 2147483647;
         const label = `Scene ${si + 1} · frame ${k + 1} of ${s.frames}`;
         setStatus(`${label}…`);
-        const r = await makeFrame(s, k, prev, seed, abortCtl.signal, label, done / total, (done + 1) / total);
+        const r = await makeFrame(s, k, prev, seed, abortCtl.signal, label, done / total, (done + 1) / total, old[k - job.from] || null);
         if (!noiseChecked) {
           noiseChecked = true; const size = $("resolution").value;
           if (noiseOk !== size && await looksLikeNoise(r.blob)) { noiseOk = size; const [W, H] = getRes(); throw new Error(noiseMessage(W, H)); }
         }
-        s.imgs.push({ blob: r.blob, seed: r.seed ?? seed });
+        s.imgs.push({ blob: r.blob, seed: r.seed ?? seed }); liveNew(r.blob);
         done++; $("genBar").style.width = `${(done / total) * 100}%`;
         updateCardState(s); updateTotals(); saveProject();
       }
@@ -1044,7 +1094,7 @@ $("genBtn").addEventListener("click", () => {
     else if (s.imgs.length < s.frames) jobs.push({ scene: s, from: s.imgs.length });
   });
   if (!jobs.length) {
-    if (confirm("Every frame is already made. Make all frames again with new seeds?")) redoAll();
+    askRedo("Every frame is already made. Make all frames again with new seeds?", jobsFrom(0, 0));
     return;
   }
   runJobs(jobs);
@@ -1053,20 +1103,55 @@ $("genBtn").addEventListener("click", () => {
 function jobsFrom(si, k) {
   return project.scenes.slice(si).map((s, j) => ({ scene: s, from: j === 0 ? k : 0 })).filter((j) => j.scene.frames > j.from);
 }
-function redoAll() { runJobs(jobsFrom(0, 0), { fresh: true }); }
+// Every redo asks once, with the "use current frames as samples" choice.
+let pendingRedo = null;
+function askRedo(text, jobs) {
+  if (busy || !jobs.length) return;
+  pendingRedo = jobs; $("redoText").textContent = text; $("redoDlg").showModal();
+}
+$("redoCancel").addEventListener("click", () => { pendingRedo = null; $("redoDlg").close(); });
+$("redoGo").addEventListener("click", () => {
+  const jobs = pendingRedo; pendingRedo = null; $("redoDlg").close(); saveSettings();
+  if (jobs) runJobs(jobs, { fresh: true, samples: $("useOld").checked });
+});
 $("redoAll").addEventListener("click", () => {
   if (busy) return;
   if (!allFrames().length) { $("genBtn").click(); return; }
-  if (confirm("Make every frame again with new seeds? The current frames will be replaced.")) redoAll();
+  askRedo("Make every frame again with new seeds? The current frames will be replaced.", jobsFrom(0, 0));
 });
 $("clearFrames").addEventListener("click", () => {
   if (busy || !allFrames().length) return;
   if (!confirm("Delete all frames? Your characters, scenes and settings stay.")) return;
   project.scenes.forEach((s) => { s.imgs.forEach((m) => dropUrl(m.blob)); s.imgs = []; s.edited = false; refreshCard(s); });
-  stopPreview(); updateTotals(); saveProject(true);
-  setStatus("All frames cleared. Tap Generate to make them again.");
+  stopPreview(); updateTotals(); liveShow(0); saveProject(true);
+  setStatus("All frames cleared. Your text is kept. Tap Generate to make them again.");
 });
 $("stopBtn").addEventListener("click", () => { if (abortCtl) abortCtl.abort(); });
+
+// ---------- live preview: loops every frame made so far, jumps to each new one ----------
+const live = { i: 0, hold: 0, timer: null };
+function liveList() {
+  const out = [];
+  project.scenes.forEach((s, si) => s.imgs.forEach((m, k) => out.push({ blob: m.blob, label: `Scene ${si + 1} · frame ${k + 1}` })));
+  return out;
+}
+function liveShow(i) {
+  const L = liveList();
+  if (!L.length) { $("liveBtn").hidden = true; $("liveImg").removeAttribute("src"); if ($("liveDlg").open) $("liveLabel").textContent = "No frames yet."; return; }
+  live.i = ((i % L.length) + L.length) % L.length;
+  const f = L[live.i], u = urlFor(f.blob);
+  $("liveBtn").hidden = false;
+  if ($("liveImg").getAttribute("src") !== u) $("liveImg").src = u;
+  if ($("liveDlg").open) {
+    if ($("liveBig").getAttribute("src") !== u) $("liveBig").src = u;
+    $("liveLabel").textContent = `${f.label} · ${live.i + 1} of ${L.length}${busy ? " · making more…" : ""}`;
+  }
+}
+function liveTick() { if (live.hold > 0) { live.hold--; return; } liveShow(live.i + 1); }
+function liveStart() { clearInterval(live.timer); live.timer = setInterval(liveTick, Math.max(120, (parseFloat($("speed").value) || 0.3) * 1000)); }
+function liveNew(blob) { const idx = liveList().findIndex((f) => f.blob === blob); live.hold = 2; liveShow(idx < 0 ? 0 : idx); }
+$("liveBtn").addEventListener("click", () => { $("liveDlg").showModal(); liveShow(live.i); });
+$("speed").addEventListener("change", liveStart);
 
 // ---------- frame actions ----------
 let openRef = null;
@@ -1078,6 +1163,7 @@ function openFrame(sceneId, k) {
   $("fdImg").src = urlFor(s.imgs[k].blob);
   $("fdMeta").textContent = `Seed ${s.imgs[k].seed}. "Redo from here" remakes this frame and every frame after it, so later frames follow the new one. "Redo only this frame" leaves the rest as they are.`;
   $("fdRedo").disabled = busy; $("fdRedoOn").disabled = busy; $("fdDelete").disabled = busy;
+  $("fdUseOld").checked = $("useOld").checked;
   $("frameDlg").showModal();
 }
 $("fdSave").addEventListener("click", () => {
@@ -1088,24 +1174,25 @@ $("fdDelete").addEventListener("click", () => {
   if (busy || !openRef) return; const { s, k } = openRef;
   const [m] = s.imgs.splice(k, 1); if (m) dropUrl(m.blob);
   if (s.frames > 1) s.frames--;
-  $("frameDlg").close(); refreshCard(s); updateTotals(); saveProject();
+  $("frameDlg").close(); refreshCard(s); updateTotals(); liveShow(live.i); saveProject();
 });
 $("fdRedoOn").addEventListener("click", () => {
   if (busy || !openRef) return; const { s, k } = openRef; const si = project.scenes.indexOf(s);
-  $("frameDlg").close();
-  runJobs(jobsFrom(si, k), { fresh: true });
+  $("frameDlg").close(); $("useOld").checked = $("fdUseOld").checked; saveSettings();
+  runJobs(jobsFrom(si, k), { fresh: true, samples: $("fdUseOld").checked });
 });
 $("fdRedo").addEventListener("click", async () => {
   if (busy || !openRef) return; const { s, k } = openRef; const si = project.scenes.indexOf(s);
-  $("frameDlg").close();
+  $("frameDlg").close(); $("useOld").checked = $("fdUseOld").checked; saveSettings();
   if (!(await checkConn())) { setStatus("Local Dream isn't reachable.", true); return; }
   abortCtl = new AbortController(); setBusy(true); keepAwake(true);
   try {
     working = { sceneId: s.id, index: k }; updateCardState(s);
     const prev = k > 0 ? s.imgs[k - 1].blob : startBlobFor(si);
     const label = `Redoing scene ${si + 1} · frame ${k + 1}`;
-    const r = await makeFrame(s, k, prev, rndSeed(), abortCtl.signal, label, 0, 1);
-    dropUrl(s.imgs[k].blob); s.imgs[k] = { blob: r.blob, seed: r.seed };
+    const sample = $("fdUseOld").checked ? s.imgs[k].blob : null;
+    const r = await makeFrame(s, k, prev, rndSeed(), abortCtl.signal, label, 0, 1, sample);
+    dropUrl(s.imgs[k].blob); s.imgs[k] = { blob: r.blob, seed: r.seed }; liveNew(r.blob);
     setStatus(`Frame ${k + 1} of scene ${si + 1} redone. Open it again to try another version.`);
   } catch (e) {
     setStatus(e && e.name === "AbortError" ? "Stopped." : (e && e.message) || String(e), !(e && e.name === "AbortError"));
@@ -1129,7 +1216,7 @@ $("newProject").addEventListener("click", () => {
   allFrames().forEach((m) => dropUrl(m.blob)); if (project.photo) dropUrl(project.photo);
   project = { character: "", subject: "none", motion: "balanced", seed: rndSeed(), photo: null, mask: null, maskAspect: 1, maskPct: 100, scenes: [newScene("")] };
   maskCache = null;
-  $("seed").value = ""; syncInputs(); renderScenes(); saveProject(true);
+  $("seed").value = ""; syncInputs(); renderScenes(); liveShow(0); saveProject(true);
   $("settingsDlg").close(); setStatus("New project started.");
 });
 function syncInputs() {
@@ -1288,7 +1375,7 @@ $("saveVid").addEventListener("click", () => { if (lastVideo) download(lastVideo
 (async () => {
   loadSettings();
   const had = await loadProject();
-  syncInputs(); renderScenes();
+  syncInputs(); renderScenes(); liveStart(); liveShow(0);
   setStatus(had ? "Welcome back. Your project was restored." : "Describe the characters (optional), write what each scene shows, then tap Generate.");
   if (!autosaveOk) $("status").textContent += " (Autosave isn't available here, so keep this page open.)";
   checkConn();
