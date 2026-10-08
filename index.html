@@ -154,6 +154,8 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
 .seg.two { grid-template-columns: repeat(2, 1fr); }
 .mask-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mask-row .sub { flex: 1 1 160px; }
+.prev-box { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.prev-box small.sub { font-weight: 400; }
 .scene-mask { gap: 6px 8px; }
 .scene-mask .sub { flex-basis: 100%; order: 3; margin: 0; }
 .mask-stage { position: relative; }
@@ -414,6 +416,8 @@ const MOTION = {
   balanced: { frame: 0.38, start: 0.60, anchor: 0.18, note: "A middle ground. Good default." },
   lively:   { frame: 0.48, start: 0.70, anchor: 0.10, note: "Bigger changes. More movement, characters may drift." },
 };
+// How much a scene may change the image it starts from ("auto" follows Smooth/Balanced/Lively).
+const CHANGE = { auto: null, little: 0.45, some: 0.65, lot: 0.85 };
 const KEEP = {
   person: { pos: "same face, same hairstyle, same outfit, consistent character", neg: "different person, changed face, different clothes" },
   object: { pos: "same shape, same colors, same material, consistent details", neg: "different object, changed shape, wrong colors" },
@@ -427,7 +431,7 @@ const RES = {
 
 // ---------- project state ----------
 function defFrames() { const el = document.getElementById("sceneFrames"); const n = el ? parseInt(el.value, 10) : 1; return Number.isFinite(n) ? Math.min(60, Math.max(1, n)) : 1; }
-function newScene(text = "", frames = defFrames()) { return { id: uid(), text, frames, move: "none", edited: false, imgs: [], mask: null, maskAspect: 1, maskPct: 100 }; }
+function newScene(text = "", frames = defFrames()) { return { id: uid(), text, frames, move: "none", edited: false, imgs: [], mask: null, maskAspect: 1, maskPct: 100, usePrev: true, change: "auto", keep: "" }; }
 let project = {
   character: "", subject: "none", motion: "balanced", seed: rndSeed(), photo: null,
   mask: null, maskAspect: 1, maskPct: 100,   // mask: PNG, white = can change, black = keep
@@ -477,7 +481,7 @@ function saveProject(now) {
         v: 1, character: project.character, subject: project.subject, motion: project.motion, seed: project.seed, photo: project.photo,
         mask: project.mask, maskAspect: project.maskAspect, maskPct: project.maskPct,
         keepPos: $("keepPos").value, keepNeg: $("keepNeg").value,
-        scenes: project.scenes.map((s) => ({ id: s.id, text: s.text, frames: s.frames, move: s.move, edited: s.edited, mask: s.mask || null, maskAspect: s.maskAspect || 1, maskPct: s.maskPct || 100, imgs: s.imgs.map((m) => ({ blob: m.blob, seed: m.seed })) })),
+        scenes: project.scenes.map((s) => ({ id: s.id, text: s.text, frames: s.frames, move: s.move, edited: s.edited, usePrev: s.usePrev !== false, change: s.change || "auto", keep: s.keep || "", mask: s.mask || null, maskAspect: s.maskAspect || 1, maskPct: s.maskPct || 100, imgs: s.imgs.map((m) => ({ blob: m.blob, seed: m.seed })) })),
       });
       autosaveOk = true;
     } catch (_) { autosaveOk = false; }
@@ -493,7 +497,7 @@ async function loadProject() {
       character: p.character || "", subject: p.subject || "none", motion: MOTION[p.motion] ? p.motion : "balanced",
       seed: Number.isFinite(p.seed) ? p.seed : rndSeed(), photo: p.photo || null,
       mask: p.photo && p.mask ? p.mask : null, maskAspect: p.maskAspect || 1, maskPct: Number.isFinite(p.maskPct) ? p.maskPct : 100,
-      scenes: p.scenes.map((s) => ({ id: s.id || uid(), text: s.text || "", frames: clamp(s.frames | 0 || 1, 1, 60), move: s.move || "none", edited: !!s.edited, mask: s.mask || null, maskAspect: s.maskAspect || 1, maskPct: Number.isFinite(s.maskPct) ? s.maskPct : 100, imgs: (s.imgs || []).filter((m) => m && m.blob).map((m) => ({ blob: m.blob, seed: m.seed })) })),
+      scenes: p.scenes.map((s) => ({ id: s.id || uid(), text: s.text || "", frames: clamp(s.frames | 0 || 1, 1, 60), move: s.move || "none", edited: !!s.edited, usePrev: s.usePrev !== false, change: CHANGE[s.change] !== undefined ? s.change : "auto", keep: s.keep || "", mask: s.mask || null, maskAspect: s.maskAspect || 1, maskPct: Number.isFinite(s.maskPct) ? s.maskPct : 100, imgs: (s.imgs || []).filter((m) => m && m.blob).map((m) => ({ blob: m.blob, seed: m.seed })) })),
     };
     if (p.keepPos != null) $("keepPos").value = p.keepPos;
     if (p.keepNeg != null) $("keepNeg").value = p.keepNeg;
@@ -636,7 +640,7 @@ async function generate(p, onStep, signal) {
 // ---------- prompts ----------
 function joinParts(parts) { return parts.map((s) => (s || "").trim().replace(/[,\s]+$/, "")).filter(Boolean).join(", "); }
 function keepOn() { return project.subject !== "none"; }
-function promptFor(scene) { return joinParts([project.character, scene.text, keepOn() ? $("keepPos").value : ""]); }
+function promptFor(scene) { return joinParts([project.character, scene.text, scene.usePrev !== false ? scene.keep : "", keepOn() ? $("keepPos").value : ""]); }
 function negativeFor() { return joinParts([$("negative").value, keepOn() ? $("keepNeg").value : ""]); }
 function estTokens(s) { return Math.ceil((s.match(/[\w'-]+|[^\s\w]/g) || []).length * 1.1); }
 
@@ -852,6 +856,56 @@ function renderScenes() {
   $("addScene").disabled = busy || project.scenes.length >= 30;
   updateTotals();
 }
+// Per scene: start from the previous image or not, how much may change, what to keep (words), what can change (painted).
+function prevBlock(s, i) {
+  const box = document.createElement("div"); box.className = "prev-box";
+  const hasSource = i > 0 || !!project.photo;
+  if (!hasSource) {
+    const p = document.createElement("p"); p.className = "sub"; p.textContent = "Scene 1 starts from its text. Add a start image to begin from a picture.";
+    box.append(p); return box;
+  }
+  const on = s.usePrev !== false;
+  const lab = document.createElement("label"); lab.className = "check";
+  const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = on; cb.disabled = busy;
+  lab.append(cb, document.createTextNode(i === 0 ? " Start from the start image" : " Start from the previous scene's last frame"));
+  cb.addEventListener("change", () => { s.usePrev = cb.checked; if (s.imgs.length) markEdited(s); refreshCard(s); queueTokens(s.id); saveProject(); });
+  box.append(lab);
+  if (!on) {
+    const p = document.createElement("p"); p.className = "sub"; p.textContent = "This scene starts fresh from its text. Nothing from earlier scenes carries over.";
+    box.append(p); return box;
+  }
+  const chg = document.createElement("label"); chg.className = "field";
+  chg.append(document.createTextNode("How much it changes from that image"));
+  const sel = document.createElement("select"); sel.disabled = busy;
+  [["auto", "Follow the motion setting"], ["little", "A little (keeps most)"], ["some", "Some"], ["lot", "A lot (mostly new)"]]
+    .forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.appendChild(o); });
+  sel.value = s.change || "auto";
+  sel.addEventListener("change", () => { s.change = sel.value; if (s.imgs.length) markEdited(s); saveProject(); });
+  chg.append(sel);
+  const kp = document.createElement("label"); kp.className = "field";
+  kp.append(document.createTextNode("Keep (words)"));
+  const ki = document.createElement("input"); ki.type = "text"; ki.value = s.keep || ""; ki.disabled = busy;
+  ki.placeholder = "e.g. girl in red dress, park bench, sunset light";
+  ki.addEventListener("input", () => { s.keep = ki.value; if (s.imgs.length) markEdited(s); queueTokens(s.id); saveProject(); });
+  const kh = document.createElement("small"); kh.className = "sub"; kh.textContent = "Added to this scene's prompt so these stay in the picture. To lock exact areas, paint them below.";
+  kp.append(ki, kh);
+
+  const mrow = document.createElement("div"); mrow.className = "mask-row scene-mask";
+  const mbtn = document.createElement("button"); mbtn.type = "button"; mbtn.className = "btn small"; mbtn.textContent = "Choose what can change";
+  mbtn.disabled = busy; mbtn.addEventListener("click", () => openMask(s));
+  const minfo = document.createElement("span"); minfo.className = "sub";
+  minfo.textContent = s.mask
+    ? `About ${s.maskPct}% of the previous image can change.${s.move !== "none" ? " Ignored while the camera moves." : ""}`
+    : (i === 0 && project.photo && project.mask ? "Uses the start image's choice." : "The whole image can change.");
+  mrow.append(mbtn, minfo);
+  if (s.mask) {
+    const mclr = document.createElement("button"); mclr.type = "button"; mclr.className = "btn small"; mclr.textContent = "Reset";
+    mclr.disabled = busy; mclr.addEventListener("click", () => { if (busy) return; s.mask = null; s.maskPct = 100; maskCache = null; if (s.imgs.length) markEdited(s); refreshCard(s); saveProject(); });
+    mrow.append(mclr);
+  }
+  box.append(chg, kp, mrow);
+  return box;
+}
 function sceneCard(s, i) {
   const li = document.createElement("li"); li.className = "scene"; li.dataset.id = s.id;
   if (working && working.sceneId === s.id) li.classList.add("working");
@@ -899,19 +953,7 @@ function sceneCard(s, i) {
   const acts = document.createElement("div"); acts.className = "scene-acts"; acts.append(clr, redo);
   foot.append(tok, acts);
   const cutEl = document.createElement("p"); cutEl.className = "cut"; cutEl.hidden = true;
-  const mrow = document.createElement("div"); mrow.className = "mask-row scene-mask";
-  const mbtn = document.createElement("button"); mbtn.type = "button"; mbtn.className = "btn small"; mbtn.textContent = "Choose what can change";
-  mbtn.disabled = busy; mbtn.addEventListener("click", () => openMask(s));
-  const minfo = document.createElement("span"); minfo.className = "sub";
-  minfo.textContent = s.mask
-    ? `About ${s.maskPct}% can change.${s.move !== "none" ? " Ignored while the camera moves." : ""}`
-    : (project.photo && project.mask ? "Uses the start image's choice." : "The whole picture can change.");
-  mrow.append(mbtn, minfo);
-  if (s.mask) {
-    const mclr = document.createElement("button"); mclr.type = "button"; mclr.className = "btn small"; mclr.textContent = "Reset";
-    mclr.disabled = busy; mclr.addEventListener("click", () => { if (busy) return; s.mask = null; s.maskPct = 100; maskCache = null; if (s.imgs.length) markEdited(s); refreshCard(s); saveProject(); });
-    mrow.append(mclr);
-  }
+  const prevBox = prevBlock(s, i);
   const sent = document.createElement("details"); sent.className = "sent";
   const sum = document.createElement("summary"); sum.textContent = "Prompt sent to Local Dream";
   const sentP = document.createElement("p"); sent.append(sum, sentP);
@@ -919,7 +961,7 @@ function sceneCard(s, i) {
   const thumbs = document.createElement("div"); thumbs.className = "thumbs"; thumbs.id = `thumbs-${s.id}`;
   fillThumbs(s, thumbs);
 
-  li.append(top, ta, ctl, mrow, foot, cutEl, sent, thumbs);
+  li.append(top, ta, ctl, prevBox, foot, cutEl, sent, thumbs);
   queueTokens(s.id);
   return li;
 }
@@ -1004,9 +1046,9 @@ $("photoInput").addEventListener("change", async (e) => {
   try { const bm = await createImageBitmap(f); bm.close(); }
   catch (_) { setStatus("This image can't be opened. Pick a JPEG or PNG (HEIC may not work).", true); return; }
   if (project.photo) dropUrl(project.photo);
-  project.photo = f; clearMask(); showPhoto(); saveProject();
+  project.photo = f; clearMask(); showPhoto(); renderScenes(); saveProject();
 });
-$("photoClear").addEventListener("click", () => { if (project.photo) dropUrl(project.photo); project.photo = null; clearMask(); showPhoto(); saveProject(); });
+$("photoClear").addEventListener("click", () => { if (project.photo) dropUrl(project.photo); project.photo = null; clearMask(); showPhoto(); renderScenes(); saveProject(); });
 function setMotion(m) {
   if (!MOTION[m]) return;
   project.motion = m;
@@ -1029,11 +1071,10 @@ function startBlobFor(sceneIdx) {
   for (let i = sceneIdx - 1; i >= 0; i--) { const im = project.scenes[i].imgs; if (im.length) return im[im.length - 1].blob; }
   return project.photo || null;
 }
-function refBlob() {
-  if (project.photo) return project.photo;
-  for (const s of project.scenes) if (s.imgs.length) return s.imgs[0].blob;
-  return null;
-}
+// The image a scene's first frame starts from, or null when the scene starts from its text only.
+function sceneInput(s) { return s.usePrev === false ? null : startBlobFor(project.scenes.indexOf(s)); }
+// Later frames of a scene are pulled gently toward that scene's own first frame, never an older scene's.
+function refFor(scene, k) { return k > 0 && scene.imgs[0] ? scene.imgs[0].blob : null; }
 function baseSeed() {
   const v = $("seed").value.trim();
   return v !== "" && Number.isFinite(+v) ? clamp(Math.floor(+v), 0, 2147483647) : project.seed;
@@ -1045,12 +1086,15 @@ function settingsNow() {
 // One frame: start from `prev` (or nothing), apply camera + reference, generate.
 // `prev` is the frame before (always used when there is one); `sample` is the old version of this frame on a redo.
 async function makeFrame(scene, k, prev, seed, signal, label, frac0, frac1, sample = null) {
-  const st = settingsNow(), mo = MOTION[project.motion];
-  let image = null, denoise = k === 0 ? mo.start : mo.frame, mask = null;
-  if (prev) image = await makeStart(prev, refBlob(), mo.anchor, scene.move, st.W, st.H, sample);
+  const st = settingsNow(), mo = MOTION[project.motion] || MOTION.balanced;
+  const sceneStart = CHANGE[scene.change] ?? mo.start;
+  let image = null, denoise = k === 0 ? sceneStart : mo.frame, mask = null;
+  if (prev) image = await makeStart(prev, refFor(scene, k), mo.anchor, scene.move, st.W, st.H, sample);
   else if (sample) image = await makeStart(sample, null, 0, "none", st.W, st.H);
-  if (sample) denoise = mo.start; // room to change details while keeping the old frame's layout
-  const mb = scene.mask || (project.photo ? project.mask : null);
+  if (sample) denoise = Math.max(denoise, mo.start); // room to change details while keeping the old frame's layout
+  // "What can change" belongs to the scene and only applies when it starts from the previous image.
+  const si = project.scenes.indexOf(scene);
+  const mb = scene.usePrev === false ? null : (scene.mask || (si === 0 && project.photo ? project.mask : null));
   if (image && mb && scene.move === "none") mask = await maskB64(mb, st.W, st.H);
   return generate({ ...st, prompt: promptFor(scene), seed, image, denoise, mask }, (s, n) => {
     $("genBar").style.width = `${(frac0 + (frac1 - frac0) * (n ? s / n : 0)) * 100}%`;
@@ -1080,7 +1124,7 @@ async function runJobs(jobs, opts = {}) {
       for (let k = job.from; k < s.frames; k++) {
         if (abortCtl.signal.aborted) throw new DOMException("Stopped", "AbortError");
         working = { sceneId: s.id, index: k }; updateCardState(s);
-        const prev = k > 0 ? s.imgs[k - 1].blob : startBlobFor(si);
+        const prev = k > 0 ? s.imgs[k - 1].blob : sceneInput(s);
         const seed = lock ? seed0 : (seed0 + si * 1000 + k) % 2147483647;
         const label = `Scene ${si + 1} · frame ${k + 1} of ${s.frames}`;
         setStatus(`${label}…`);
@@ -1205,7 +1249,7 @@ $("fdRedo").addEventListener("click", async () => {
   abortCtl = new AbortController(); setBusy(true); keepAwake(true);
   try {
     working = { sceneId: s.id, index: k }; updateCardState(s);
-    const prev = k > 0 ? s.imgs[k - 1].blob : startBlobFor(si);
+    const prev = k > 0 ? s.imgs[k - 1].blob : sceneInput(s);
     const label = `Redoing scene ${si + 1} · frame ${k + 1}`;
     const sample = $("fdUseOld").checked ? s.imgs[k].blob : null;
     const r = await makeFrame(s, k, prev, rndSeed(), abortCtl.signal, label, 0, 1, sample);
@@ -1266,7 +1310,7 @@ function showMaskInfo() {
 }
 const ME = { view: null, ctx: null, photo: null, mask: null, mctx: null, tool: "keep", down: false, last: null, raf: 0, target: null };
 // The picture a scene's mask is drawn over: its own first frame, else the image it grows out of.
-function sceneMaskBg(s) { const si = project.scenes.indexOf(s); return (s.imgs[0] && s.imgs[0].blob) || startBlobFor(si); }
+function sceneMaskBg(s) { return startBlobFor(project.scenes.indexOf(s)); }
 // target: null = the start image, or a scene object.
 async function openMask(target = null) {
   if (busy) return;
@@ -1285,8 +1329,8 @@ async function openMask(target = null) {
   const si = target ? project.scenes.indexOf(target) : -1;
   $("h-mask").textContent = target ? `Scene ${si + 1}: what can change` : "What can change";
   $("maskNote").textContent = target
-    ? "Amber areas can change in every frame of this scene. Unmark the parts that must stay as they are." +
-      (bg ? "" : " This scene has no picture yet, so you're marking areas on a blank grid. Generate the scene before it to see what you're marking.") +
+    ? "This is the image this scene starts from. Amber areas can change; unmark the parts that must stay as they are in every frame of this scene." +
+      (bg ? "" : " There's no previous image yet, so you're marking areas on a blank grid. Generate the scene before it to see what you're marking.") +
       (target.move !== "none" ? " This scene has a camera move, so the mask is ignored until you set it to Camera still." : "")
     : "Amber areas can change. Rub out (unmark) the parts that must stay exactly as they are. Scenes with their own mask or a camera move ignore this.";
   const mask = document.createElement("canvas"); mask.width = ew; mask.height = eh; const mctx = mask.getContext("2d");

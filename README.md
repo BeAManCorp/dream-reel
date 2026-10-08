@@ -28,7 +28,15 @@ Generate only makes what's missing: new scenes, edited scenes, and extra frames.
 - Tap a frame for **Redo from here to the end** (this frame and everything after it) or **Redo only this frame**.
 - Every redo asks whether to **use the current frames as samples**. On: each new frame starts from the frame before it plus its old version, so it keeps the look and changes details. Off: it starts only from the frame before it. The choice is remembered.
 
-Each scene has its own **Choose what can change**: paint over the scene's picture which areas may change, and everything else stays as it is in every frame of that scene. It's drawn over the scene's first frame, or the picture the scene grows out of. **Reset** removes it. It's ignored while that scene has a camera move. The start image's choice applies to scenes without their own.
+Each scene (after the first, or the first when there's a start image) has a **Start from the previous scene's last frame** box:
+
+- **Off:** the scene starts fresh from its own text. Nothing from earlier scenes carries over.
+- **On:** the scene's first frame starts from the previous scene's last frame (or the start image). Then:
+  - **How much it changes from that image:** A little / Some / A lot, or follow the Smooth/Balanced/Lively setting.
+  - **Keep (words):** things to keep, added to this scene's prompt.
+  - **Choose what can change:** paint over the previous image which areas may change; the rest stays exact in every frame of this scene. **Reset** removes it. Ignored while that scene has a camera move.
+
+Frames inside a scene are pulled gently toward that scene's own first frame, never toward older scenes.
 
 Each new frame always starts from the one before it; only the very first frame (with no start image) starts from text alone. While frames are being made, the small picture in the bottom bar loops through every frame so far and jumps to each new one. Tap it for a large view.
 
