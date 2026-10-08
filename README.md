@@ -28,6 +28,8 @@ Generate only makes what's missing: new scenes, edited scenes, and extra frames.
 - Tap a frame for **Redo from here to the end** (this frame and everything after it) or **Redo only this frame**.
 - Every redo asks whether to **use the current frames as samples**. On: each new frame starts from the frame before it plus its old version, so it keeps the look and changes details. Off: it starts only from the frame before it. The choice is remembered.
 
+Each scene has its own **Choose what can change**: paint over the scene's picture which areas may change, and everything else stays as it is in every frame of that scene. It's drawn over the scene's first frame, or the picture the scene grows out of. **Reset** removes it. It's ignored while that scene has a camera move. The start image's choice applies to scenes without their own.
+
 Each new frame always starts from the one before it; only the very first frame (with no start image) starts from text alone. While frames are being made, the small picture in the bottom bar loops through every frame so far and jumps to each new one. Tap it for a large view.
 
 Each scene makes 1 frame by default. Change it per scene with − / +, or for new scenes in **Settings → Frames per new scene** (**Use for all scenes** applies it everywhere). Open **Prompt sent to Local Dream** on a scene to see the exact prompt, with any part the model ignores struck through. Work autosaves in the phone's browser storage.

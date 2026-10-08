@@ -154,6 +154,8 @@ dialog::backdrop { background: rgba(0,0,0,.5); }
 .seg.two { grid-template-columns: repeat(2, 1fr); }
 .mask-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mask-row .sub { flex: 1 1 160px; }
+.scene-mask { gap: 6px 8px; }
+.scene-mask .sub { flex-basis: 100%; order: 3; margin: 0; }
 .mask-stage { position: relative; }
 .mask-stage canvas { width: 100%; height: auto; display: block; border-radius: 12px; background: #000; touch-action: none; }
 .range-head { display: flex; justify-content: space-between; gap: 8px; }
@@ -334,7 +336,7 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
 <dialog id="maskDlg" aria-labelledby="h-mask">
   <div class="dlg">
     <div class="dlg-head"><h2 id="h-mask">What can change</h2></div>
-    <p class="sub">Amber areas can change. Rub out (unmark) the parts that must stay exactly as they are. Scenes with a camera move ignore this.</p>
+    <p class="sub" id="maskNote">Amber areas can change. Rub out (unmark) the parts that must stay exactly as they are. Scenes with a camera move ignore this.</p>
     <div class="mask-stage"><canvas id="maskView" aria-label="Start image with the changeable area in amber"></canvas></div>
     <div class="seg two" role="group" aria-label="Brush">
       <button type="button" data-tool="keep" aria-pressed="true">Unmark (keep)</button>
@@ -425,7 +427,7 @@ const RES = {
 
 // ---------- project state ----------
 function defFrames() { const el = document.getElementById("sceneFrames"); const n = el ? parseInt(el.value, 10) : 1; return Number.isFinite(n) ? Math.min(60, Math.max(1, n)) : 1; }
-function newScene(text = "", frames = defFrames()) { return { id: uid(), text, frames, move: "none", edited: false, imgs: [] }; }
+function newScene(text = "", frames = defFrames()) { return { id: uid(), text, frames, move: "none", edited: false, imgs: [], mask: null, maskAspect: 1, maskPct: 100 }; }
 let project = {
   character: "", subject: "none", motion: "balanced", seed: rndSeed(), photo: null,
   mask: null, maskAspect: 1, maskPct: 100,   // mask: PNG, white = can change, black = keep
@@ -475,7 +477,7 @@ function saveProject(now) {
         v: 1, character: project.character, subject: project.subject, motion: project.motion, seed: project.seed, photo: project.photo,
         mask: project.mask, maskAspect: project.maskAspect, maskPct: project.maskPct,
         keepPos: $("keepPos").value, keepNeg: $("keepNeg").value,
-        scenes: project.scenes.map((s) => ({ id: s.id, text: s.text, frames: s.frames, move: s.move, edited: s.edited, imgs: s.imgs.map((m) => ({ blob: m.blob, seed: m.seed })) })),
+        scenes: project.scenes.map((s) => ({ id: s.id, text: s.text, frames: s.frames, move: s.move, edited: s.edited, mask: s.mask || null, maskAspect: s.maskAspect || 1, maskPct: s.maskPct || 100, imgs: s.imgs.map((m) => ({ blob: m.blob, seed: m.seed })) })),
       });
       autosaveOk = true;
     } catch (_) { autosaveOk = false; }
@@ -491,7 +493,7 @@ async function loadProject() {
       character: p.character || "", subject: p.subject || "none", motion: MOTION[p.motion] ? p.motion : "balanced",
       seed: Number.isFinite(p.seed) ? p.seed : rndSeed(), photo: p.photo || null,
       mask: p.photo && p.mask ? p.mask : null, maskAspect: p.maskAspect || 1, maskPct: Number.isFinite(p.maskPct) ? p.maskPct : 100,
-      scenes: p.scenes.map((s) => ({ id: s.id || uid(), text: s.text || "", frames: clamp(s.frames | 0 || 1, 1, 60), move: s.move || "none", edited: !!s.edited, imgs: (s.imgs || []).filter((m) => m && m.blob).map((m) => ({ blob: m.blob, seed: m.seed })) })),
+      scenes: p.scenes.map((s) => ({ id: s.id || uid(), text: s.text || "", frames: clamp(s.frames | 0 || 1, 1, 60), move: s.move || "none", edited: !!s.edited, mask: s.mask || null, maskAspect: s.maskAspect || 1, maskPct: Number.isFinite(s.maskPct) ? s.maskPct : 100, imgs: (s.imgs || []).filter((m) => m && m.blob).map((m) => ({ blob: m.blob, seed: m.seed })) })),
     };
     if (p.keepPos != null) $("keepPos").value = p.keepPos;
     if (p.keepNeg != null) $("keepNeg").value = p.keepNeg;
@@ -881,7 +883,7 @@ function sceneCard(s, i) {
   const sel = document.createElement("select"); sel.id = `move-${s.id}`; sel.setAttribute("aria-label", `Scene ${i + 1} camera`);
   MOVES.forEach(([v, t]) => { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.appendChild(o); });
   sel.value = s.move;
-  sel.addEventListener("change", () => { s.move = sel.value; if (s.imgs.length) markEdited(s); saveProject(); });
+  sel.addEventListener("change", () => { s.move = sel.value; if (s.imgs.length) markEdited(s); if (s.mask) refreshCard(s); saveProject(); });
   ctl.append(step, sel);
 
   const foot = document.createElement("div"); foot.className = "scene-foot";
@@ -897,6 +899,19 @@ function sceneCard(s, i) {
   const acts = document.createElement("div"); acts.className = "scene-acts"; acts.append(clr, redo);
   foot.append(tok, acts);
   const cutEl = document.createElement("p"); cutEl.className = "cut"; cutEl.hidden = true;
+  const mrow = document.createElement("div"); mrow.className = "mask-row scene-mask";
+  const mbtn = document.createElement("button"); mbtn.type = "button"; mbtn.className = "btn small"; mbtn.textContent = "Choose what can change";
+  mbtn.disabled = busy; mbtn.addEventListener("click", () => openMask(s));
+  const minfo = document.createElement("span"); minfo.className = "sub";
+  minfo.textContent = s.mask
+    ? `About ${s.maskPct}% can change.${s.move !== "none" ? " Ignored while the camera moves." : ""}`
+    : (project.photo && project.mask ? "Uses the start image's choice." : "The whole picture can change.");
+  mrow.append(mbtn, minfo);
+  if (s.mask) {
+    const mclr = document.createElement("button"); mclr.type = "button"; mclr.className = "btn small"; mclr.textContent = "Reset";
+    mclr.disabled = busy; mclr.addEventListener("click", () => { if (busy) return; s.mask = null; s.maskPct = 100; maskCache = null; if (s.imgs.length) markEdited(s); refreshCard(s); saveProject(); });
+    mrow.append(mclr);
+  }
   const sent = document.createElement("details"); sent.className = "sent";
   const sum = document.createElement("summary"); sum.textContent = "Prompt sent to Local Dream";
   const sentP = document.createElement("p"); sent.append(sum, sentP);
@@ -904,7 +919,7 @@ function sceneCard(s, i) {
   const thumbs = document.createElement("div"); thumbs.className = "thumbs"; thumbs.id = `thumbs-${s.id}`;
   fillThumbs(s, thumbs);
 
-  li.append(top, ta, ctl, foot, cutEl, sent, thumbs);
+  li.append(top, ta, ctl, mrow, foot, cutEl, sent, thumbs);
   queueTokens(s.id);
   return li;
 }
@@ -993,11 +1008,12 @@ $("photoInput").addEventListener("change", async (e) => {
 });
 $("photoClear").addEventListener("click", () => { if (project.photo) dropUrl(project.photo); project.photo = null; clearMask(); showPhoto(); saveProject(); });
 function setMotion(m) {
+  if (!MOTION[m]) return;
   project.motion = m;
-  document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.motion === m)));
+  document.querySelectorAll(".seg [data-motion]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.motion === m)));
   $("motionNote").textContent = MOTION[m].note;
 }
-document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => { setMotion(b.dataset.motion); saveProject(); }));
+document.querySelectorAll(".seg [data-motion]").forEach((b) => b.addEventListener("click", () => { setMotion(b.dataset.motion); saveProject(); }));
 
 // ---------- generation ----------
 function setStatus(msg, err) { const s = $("status"); s.textContent = msg; s.classList.toggle("err", !!err); }
@@ -1034,7 +1050,8 @@ async function makeFrame(scene, k, prev, seed, signal, label, frac0, frac1, samp
   if (prev) image = await makeStart(prev, refBlob(), mo.anchor, scene.move, st.W, st.H, sample);
   else if (sample) image = await makeStart(sample, null, 0, "none", st.W, st.H);
   if (sample) denoise = mo.start; // room to change details while keeping the old frame's layout
-  if (image && project.mask && project.photo && scene.move === "none") mask = await maskB64(st.W, st.H);
+  const mb = scene.mask || (project.photo ? project.mask : null);
+  if (image && mb && scene.move === "none") mask = await maskB64(mb, st.W, st.H);
   return generate({ ...st, prompt: promptFor(scene), seed, image, denoise, mask }, (s, n) => {
     $("genBar").style.width = `${(frac0 + (frac1 - frac0) * (n ? s / n : 0)) * 100}%`;
     setStatus(`${label} · step ${s}/${n}`);
@@ -1227,16 +1244,16 @@ function syncInputs() {
 }
 
 // ---------- what can change (inpaint mask) ----------
-let maskCache = null; // { key, b64 }
+let maskCache = null; // { key, blob, b64 }
 // Mask for a W×H request: white = can change, black = keep. Cropped the same way as the start image.
-async function maskB64(W, H) {
+async function maskB64(maskBlob, W, H) {
   const key = `${W}x${H}`;
-  if (maskCache && maskCache.key === key && maskCache.blob === project.mask) return maskCache.b64;
-  const bm = await createImageBitmap(project.mask);
+  if (maskCache && maskCache.key === key && maskCache.blob === maskBlob) return maskCache.b64;
+  const bm = await createImageBitmap(maskBlob);
   const c = document.createElement("canvas"); c.width = W; c.height = H; const ctx = c.getContext("2d");
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H); drawCover(ctx, bm, bm.width, bm.height, W, H); bm.close();
   const b64 = await blobToB64(await canvasToBlob(c, "image/png"));
-  maskCache = { key, blob: project.mask, b64 };
+  maskCache = { key, blob: maskBlob, b64 };
   return b64;
 }
 function showMaskInfo() {
@@ -1247,18 +1264,35 @@ function showMaskInfo() {
   if (project.mask && Math.abs(project.maskAspect - W / H) > 0.01) t += " The resolution shape changed, so reopen this to check the areas.";
   $("maskInfo").textContent = t;
 }
-const ME = { view: null, ctx: null, photo: null, mask: null, mctx: null, tool: "keep", down: false, last: null, raf: 0 };
-async function openMask() {
-  if (busy || !project.photo) return;
+const ME = { view: null, ctx: null, photo: null, mask: null, mctx: null, tool: "keep", down: false, last: null, raf: 0, target: null };
+// The picture a scene's mask is drawn over: its own first frame, else the image it grows out of.
+function sceneMaskBg(s) { const si = project.scenes.indexOf(s); return (s.imgs[0] && s.imgs[0].blob) || startBlobFor(si); }
+// target: null = the start image, or a scene object.
+async function openMask(target = null) {
+  if (busy) return;
+  const bg = target ? sceneMaskBg(target) : project.photo;
+  if (!target && !bg) return;
+  const cur = target ? target.mask : project.mask;
   const [W, H] = getRes(); const long = 512;
   const ew = W >= H ? long : Math.round(long * W / H), eh = W >= H ? Math.round(long * H / W) : long;
-  const pb = await createImageBitmap(project.photo);
-  const photo = document.createElement("canvas"); photo.width = ew; photo.height = eh;
-  drawCover(photo.getContext("2d"), pb, pb.width, pb.height, ew, eh); pb.close();
+  const photo = document.createElement("canvas"); photo.width = ew; photo.height = eh; const pctx = photo.getContext("2d");
+  if (bg) { const pb = await createImageBitmap(bg); drawCover(pctx, pb, pb.width, pb.height, ew, eh); pb.close(); }
+  else { // no picture yet: a plain grid so areas can still be marked
+    pctx.fillStyle = "#2a2d36"; pctx.fillRect(0, 0, ew, eh); pctx.strokeStyle = "#3a3e4a"; pctx.lineWidth = 1;
+    for (let x = 0; x <= ew; x += ew / 8) { pctx.beginPath(); pctx.moveTo(x, 0); pctx.lineTo(x, eh); pctx.stroke(); }
+    for (let y = 0; y <= eh; y += eh / 8) { pctx.beginPath(); pctx.moveTo(0, y); pctx.lineTo(ew, y); pctx.stroke(); }
+  }
+  const si = target ? project.scenes.indexOf(target) : -1;
+  $("h-mask").textContent = target ? `Scene ${si + 1}: what can change` : "What can change";
+  $("maskNote").textContent = target
+    ? "Amber areas can change in every frame of this scene. Unmark the parts that must stay as they are." +
+      (bg ? "" : " This scene has no picture yet, so you're marking areas on a blank grid. Generate the scene before it to see what you're marking.") +
+      (target.move !== "none" ? " This scene has a camera move, so the mask is ignored until you set it to Camera still." : "")
+    : "Amber areas can change. Rub out (unmark) the parts that must stay exactly as they are. Scenes with their own mask or a camera move ignore this.";
   const mask = document.createElement("canvas"); mask.width = ew; mask.height = eh; const mctx = mask.getContext("2d");
-  if (project.mask) {
+  if (cur) {
     // Stored mask is white/black; turn it into "opaque = can change" for editing.
-    const mb = await createImageBitmap(project.mask);
+    const mb = await createImageBitmap(cur);
     const tmp = document.createElement("canvas"); tmp.width = ew; tmp.height = eh; const tctx = tmp.getContext("2d");
     tctx.fillStyle = "#000"; tctx.fillRect(0, 0, ew, eh); drawCover(tctx, mb, mb.width, mb.height, ew, eh); mb.close();
     const src = tctx.getImageData(0, 0, ew, eh), out = mctx.createImageData(ew, eh);
@@ -1266,7 +1300,7 @@ async function openMask() {
     mctx.putImageData(out, 0, 0);
   } else { mctx.fillStyle = "#fff"; mctx.fillRect(0, 0, ew, eh); }
   const view = $("maskView"); view.width = ew; view.height = eh;
-  Object.assign(ME, { view, ctx: view.getContext("2d"), photo, mask, mctx, down: false, last: null });
+  Object.assign(ME, { view, ctx: view.getContext("2d"), photo, mask, mctx, down: false, last: null, target });
   setTool("keep"); $("maskErr").textContent = ""; drawMaskView();
   $("maskDlg").showModal();
 }
@@ -1301,15 +1335,25 @@ $("maskSave").addEventListener("click", async () => {
   for (let i = 3; i < a.length; i += 4) if (a[i] > 127) on++;
   const pct = Math.round((on / (w * h)) * 100);
   if (on === 0) { $("maskErr").textContent = "Nothing is marked, so nothing could change. Mark at least some area."; return; }
-  if (pct >= 99) { clearMask(); }
-  else {
+  let blob = null;
+  if (pct < 99) {
     const out = document.createElement("canvas"); out.width = w; out.height = h; const o = out.getContext("2d");
     o.fillStyle = "#000"; o.fillRect(0, 0, w, h); o.drawImage(mask, 0, 0); // opaque white strokes = can change
-    project.mask = await canvasToBlob(out, "image/png"); project.maskAspect = w / h; project.maskPct = Math.max(1, pct); maskCache = null;
+    blob = await canvasToBlob(out, "image/png");
   }
-  $("maskDlg").close(); showMaskInfo(); saveProject();
+  const t = ME.target; maskCache = null;
+  if (t) {
+    const before = t.mask;
+    t.mask = blob; t.maskAspect = w / h; t.maskPct = blob ? Math.max(1, pct) : 100;
+    if (t.imgs.length && (before || blob)) markEdited(t);
+    $("maskDlg").close(); refreshCard(t);
+  } else {
+    if (blob) { project.mask = blob; project.maskAspect = w / h; project.maskPct = Math.max(1, pct); } else clearMask();
+    $("maskDlg").close(); showMaskInfo();
+  }
+  saveProject();
 });
-$("maskBtn").addEventListener("click", openMask);
+$("maskBtn").addEventListener("click", () => openMask(null));
 
 // ---------- preview & video ----------
 async function loadBitmaps() { const out = []; for (const m of allFrames()) out.push(await createImageBitmap(m.blob)); return out; }
