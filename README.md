@@ -35,6 +35,10 @@ While Local Dream is open, its engine also accepts requests from other web pages
 - **Not a video model:** smooth motion comes from small changes between frames, camera moves, and blending. Two characters in fast action are hard for these models.
 - **Resolution:** only the sizes your downloaded NPU model lists in Local Dream will work. CPU models support squares up to 512 × 512.
 
-## Hosting
+## Website
 
-This repo is private, and GitHub's free plan only serves Pages sites from public repos. To open the app from a web address instead of a downloaded file, either make the repo public or use a paid plan, then turn on **Settings → Pages** (deploy from `main`, root folder).
+Once GitHub Pages is on (**Settings → Pages**, source **Deploy from a branch**, branch `main`, folder `/ (root)`), the app is at:
+
+**https://beamancorp.github.io/dream-reel/** (full version: `/dream-reel-full.html`)
+
+Open it in Chrome on the phone and use **⋮ → Add to Home screen**. After the first visit it also opens without internet; only Local Dream is needed. When online, it picks up the latest version automatically.

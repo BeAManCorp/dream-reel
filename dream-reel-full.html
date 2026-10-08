@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob: data:; connect-src http://127.0.0.1:8081 http://localhost:8081; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; media-src blob: data:; connect-src http://127.0.0.1:8081 http://localhost:8081; form-action 'none'; base-uri 'none'">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<meta name="theme-color" content="#101217">
 <title>Dream Reel</title>
 <!--
   Dream Reel: animate a character with Local Dream, offline.
@@ -1174,6 +1177,8 @@ renderActs();
 setMode("text");
 renderStrip();
 checkConn();
+// Offline support when served from a website (not from a downloaded file).
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>
 </body>
